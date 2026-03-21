@@ -1,0 +1,98 @@
+/*----------------------------------------------------------------------------*
+  SqlDialectHelper.tlpp
+  Helper para aplicação de limite de linhas compatível com cada banco de dados
+
+  Suporta:
+  - SQL Server: SELECT TOP N ...
+  - Oracle: SELECT ... FETCH FIRST N ROWS ONLY
+  - PostgreSQL: SELECT ... LIMIT N
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+/*============================================================================*
+  Classe: SqlDialectHelper
+  Descrição: Aplica limites de linhas conforme o dialeto do banco de dados
+*============================================================================*/
+Class SqlDialectHelper
+
+  Method ApplyRowLimit(cSql, nMax, cDatabase)
+
+EndClass
+
+/*============================================================================*
+  Método: ApplyRowLimit
+  Descrição: Aplica limite de linhas compatível com o banco de dados
+  
+  Parâmetros:
+  - cSql       : String SQL original
+  - nMax       : Número máximo de linhas
+  - cDatabase  : Identificador do banco (default|sqlserver|oracle|postgres)
+  
+  Retorno:
+  - String SQL com limite aplicado (se aplicável)
+  
+  Regras:
+  - Apenas aplica limite para queries SELECT
+  - Não duplica limite se já existir TOP/LIMIT/FETCH
+*============================================================================*/
+Method ApplyRowLimit(cSql, nMax, cDatabase) Class SqlDialectHelper
+
+  Local cUpper    As Character
+  Local cSqlUpper As Character
+  Local lHasLimit As Logical := .F.
+
+  Default cSql     := ""
+  Default nMax     := 0
+  Default cDatabase := "default"
+
+  If Empty(cSql) .Or. nMax <= 0
+    Return cSql
+  EndIf
+
+  cUpper := Upper(AllTrim(cSql))
+
+  If !(cUpper Begins "SELECT")
+    Return cSql
+  EndIf
+
+  cSqlUpper := StrTran(cUpper, " ", "")
+  
+  If ("TOP" $ cSqlUpper) .And. (cDatabase == "default" .Or. cDatabase == "sqlserver")
+    lHasLimit := .T.
+  EndIf
+  
+  If ("LIMIT" $ cSqlUpper) .And. cDatabase == "postgres"
+    lHasLimit := .T.
+  EndIf
+  
+  If "FETCH" $ cSqlUpper
+    lHasLimit := .T.
+  EndIf
+
+  If lHasLimit
+    Return cSql
+  EndIf
+
+  Do Case
+    Case cDatabase == "default" .Or. cDatabase == "sqlserver"
+      cSql := "SELECT TOP " + cValToChar(nMax) + " " + SubStr(cSql, 8)
+
+    Case cDatabase == "oracle"
+      cSql := cSql + " FETCH FIRST " + cValToChar(nMax) + " ROWS ONLY"
+
+    Case cDatabase == "postgres"
+      cSql := cSql + " LIMIT " + cValToChar(nMax)
+
+    Otherwise
+      cSql := "SELECT TOP " + cValToChar(nMax) + " " + SubStr(cSql, 8)
+  EndCase
+
+Return cSql
+
+/*============================================================================*
+  Função: SqlDialectHelper
+  Descrição: Factory function para compatibilidade com uso funcional
+*============================================================================*/
+Function SqlDialectHelper()
+  Return SqlDialectHelper():New()

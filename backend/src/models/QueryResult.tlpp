@@ -1,0 +1,85 @@
+#include "tlpp-core.tlpp"
+
+namespace models
+
+class QueryResult
+
+    public data executionId    as char
+    public data columns        as array
+    public data rows           as array
+    public data rowCount       as numeric
+    public data executionTimeMs as numeric
+    public data queryType      as char
+    public data success        as logical
+    public data error          as char
+    public data rowsAffected   as numeric
+
+    public method new() constructor
+
+    public method toJson() as char
+    public method setSuccess(lSuccess as logical) as self
+    public method setError(cError as char) as self
+
+endclass
+
+method new() class QueryResult
+
+    ::executionId     := ""
+    ::columns         := {}
+    ::rows            := {}
+    ::rowCount        := 0
+    ::executionTimeMs := 0
+    ::queryType       := ""
+    ::success         := .F.
+    ::error           := ""
+    ::rowsAffected    := 0
+
+return self
+
+method toJson() class QueryResult
+
+    local cJson as char
+    local oJson as json
+    local oError as json
+    local i as numeric
+
+    oJson := JsonObject():New()
+
+    oJson["executionId"]     := ::executionId
+    oJson["rowCount"]         := ::rowCount
+    oJson["executionTimeMs"]  := ::executionTimeMs
+    oJson["queryType"]        := ::queryType
+    oJson["success"]          := ::success
+    oJson["rowsAffected"]     := ::rowsAffected
+
+    if Len(::columns) > 0
+        oJson["columns"] := ::columns
+    endif
+
+    if Len(::rows) > 0
+        oJson["rows"] := ::rows
+    endif
+
+    if !Empty(::error)
+        oError := JsonObject():New()
+        oError["message"] := ::error
+        oJson["error"] := oError
+        oError:Destroy()
+    endif
+
+    cJson := oJson:toJson()
+
+    oJson:Destroy()
+
+return cJson
+
+method setSuccess(lSuccess as logical) class QueryResult
+
+    ::success := lSuccess
+return self
+
+method setError(cError as char) class QueryResult
+
+    ::error := cError
+    ::success := .F.
+return self

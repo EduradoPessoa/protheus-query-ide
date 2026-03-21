@@ -1,0 +1,75 @@
+#include "tlpp-core.tlpp"
+
+namespace models
+
+class QueryRequest
+
+    public data sql      as char
+    public data database as char
+    public data company  as char
+    public data branch   as char
+    public data maxRows  as numeric
+    public data timeout  as numeric
+
+    public method new() constructor
+
+    public method toJson() as char
+    public method fromJson(cJson as char) as logical
+
+endclass
+
+method new() class QueryRequest
+
+    ::sql      := ""
+    ::database := "default"
+    ::company  := ""
+    ::branch   := ""
+    ::maxRows  := 1000
+    ::timeout  := 30
+
+return self
+
+method toJson() class QueryRequest
+
+    local cJson as char
+    local oJson as json
+
+    oJson := JsonObject():New()
+
+    oJson["sql"]      := ::sql
+    oJson["database"] := ::database
+    oJson["company"]  := ::company
+    oJson["branch"]   := ::branch
+    oJson["maxRows"]  := ::maxRows
+    oJson["timeout"]  := ::timeout
+
+    cJson := oJson:toJson()
+
+    oJson:Destroy()
+
+return cJson
+
+method fromJson(cJson as char) class QueryRequest
+
+    local lSuccess as logical
+    local oJson    as json
+
+    lSuccess := .F.
+
+    if !Empty(cJson)
+        oJson := JsonObject():New()
+
+        if oJson:fromJson(cJson)
+            ::sql      := oJson:GetValue("sql", "")
+            ::database := oJson:GetValue("database", "default")
+            ::company  := oJson:GetValue("company", "")
+            ::branch   := oJson:GetValue("branch", "")
+            ::maxRows  := oJson:GetValue("maxRows", 1000)
+            ::timeout  := oJson:GetValue("timeout", 30)
+            lSuccess := .T.
+        endif
+
+        oJson:Destroy()
+    endif
+
+return lSuccess

@@ -1,0 +1,61 @@
+#include "tlpp-core.tlpp"
+
+namespace models
+
+class FavoriteRecord
+
+    public data FAV_ID   as char
+    public data FAV_EMPRESA as char
+    public data FAV_USUARIO as char
+    public data FAV_NOME as char
+    public data FAV_DESC as char
+    public data FAV_SQL as char
+    public data FAV_BANCO as char
+    public data FAV_DTCRI as char
+    public data FAV_DTALT as char
+    public data FAV_DELETED as char
+
+    public method new() constructor
+
+    public method toJson() as char
+
+endclass
+
+method new() class FavoriteRecord
+
+    ::FAV_ID   := ""
+    ::FAV_EMPRESA := ""
+    ::FAV_USUARIO := ""
+    ::FAV_NOME := ""
+    ::FAV_DESC := ""
+    ::FAV_SQL := ""
+    ::FAV_BANCO := ""
+    ::FAV_DTCRI := ""
+    ::FAV_DTALT := ""
+    ::FAV_DELETED := "N"
+
+return self
+
+method toJson() class FavoriteRecord
+
+    local cJson as char
+    local oJson as json
+
+    oJson := JsonObject():New()
+
+    oJson["FAV_ID"]   := ::FAV_ID
+    oJson["FAV_EMPRESA"] := ::FAV_EMPRESA
+    oJson["FAV_USUARIO"] := ::FAV_USUARIO
+    oJson["FAV_NOME"] := ::FAV_NOME
+    oJson["FAV_DESC"] := ::FAV_DESC
+    oJson["FAV_SQL"] := ::FAV_SQL
+    oJson["FAV_BANCO"] := ::FAV_BANCO
+    oJson["FAV_DTCRI"] := ::FAV_DTCRI
+    oJson["FAV_DTALT"] := ::FAV_DTALT
+    oJson["FAV_DELETED"] := ::FAV_DELETED
+
+    cJson := oJson:toJson()
+
+    oJson:Destroy()
+
+return cJson

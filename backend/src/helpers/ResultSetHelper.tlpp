@@ -1,0 +1,53 @@
+#include "protheus.ch"
+
+Class ResultSetHelper
+
+  Method GetColumns(cAlias As Character) As Array
+  Method GetRows(cAlias As Character, nMaxRows As Integer) As Array
+
+EndClass
+
+Method GetColumns(cAlias As Character) As Array
+  Local aColumns As Array := {}
+  Local i        As Integer
+
+  For i := 1 To (cAlias)->(FCount())
+    Local oCol As Object := JsonObject():New()
+    oCol:Set("name", (cAlias)->(FieldName(i)))
+    oCol:Set("type", (cAlias)->(FieldType(i)))
+    oCol:Set("size", (cAlias)->(FieldSize(i)))
+    oCol:Set("dec", (cAlias)->(FieldDec(i)))
+    AAdd(aColumns, oCol)
+  Next i
+
+  Return aColumns
+EndMethod
+
+Method GetRows(cAlias As Character, nMaxRows As Integer) As Array
+  Local aRows  As Array   := {}
+  Local nCount As Integer := 0
+  Local xValue As Dynamic
+
+  (cAlias)->(DbGoTop())
+
+  While !(cAlias)->(Eof()) .And. nCount < nMaxRows
+    Local aRow As Array := {}
+    Local i    As Integer
+
+    For i := 1 To (cAlias)->(FCount())
+      xValue := (cAlias)->(FieldGet(i))
+
+      If xValue == Nil .Or. Empty(xValue) .And. ValType(xValue) != "C"
+        xValue := NullValue(xValue)
+      EndIf
+
+      AAdd(aRow, xValue)
+    Next i
+
+    AAdd(aRows, aRow)
+    (cAlias)->(DbSkip())
+    nCount++
+  EndDo
+
+  Return aRows
+EndMethod
