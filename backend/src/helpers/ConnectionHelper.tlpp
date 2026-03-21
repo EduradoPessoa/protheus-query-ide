@@ -136,9 +136,35 @@ Method RegisterDatabase(cFriendlyName As Character, cAlias As Character) As Logi
   
   Return .T.
 
+/*============================================================================*
+  Metodo: TestConnection
+  Descricao: Testa se uma conexao esta disponivel
+  
+  Parametros:
+    cAlias - Alias da conexao a testar
+  
+  Retorno:
+    Logical - .T. se a conexao esta disponivel
+ *============================================================================*/
+Method TestConnection(cAlias As Character) As Logical
+  Local lResult As Logical := .F.
+  
+  If Empty(cAlias)
+    Return .F.
+  EndIf
+  
+  lResult := MsConnect(cAlias)
+  
+  If lResult
+    MsDisconnect(cAlias)
+  EndIf
+  
+  Return lResult
+
 Class ConnectionHelper
   Method Connect(cDatabase)
   Method Disconnect(cAlias)
+  Method TestConnection(cAlias)
   Method GetAvailableDatabases()
   Method RegisterDatabase(cFriendlyName, cAlias)
 EndClass

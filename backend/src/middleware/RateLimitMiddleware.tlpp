@@ -1,0 +1,162 @@
+/*----------------------------------------------------------------------------*
+  RateLimitMiddleware.tlpp
+  Middleware para limitacao de requisicoes por usuario
+  
+  Funcionalidades:
+  - Limita requisicoes a 60 req/min por usuario
+  - Identifica usuario pelo token JWT
+  - Armazenamento em memoria (variavel estatica)
+  - Reseta contador apos 60 segundos de inatividade
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+Static aRateLimitData := {}
+
+Static nRateLimitMax   := 60
+Static nRateLimitWindow := 60
+
+/*============================================================================*
+  Metodo: CheckRateLimit
+  Descricao: Verifica se usuario esta dentro do limite de requisicoes
+  
+  Parametros:
+    oRequest - Objeto da requisição HTTP
+  
+  Retorno:
+    Logical - .T. se dentro do limite, .F. se excedido
+  
+  Comportamento:
+    - Extrai token JWT do header Authorization
+    - Decodifica payload para obter usuario (claim "sub")
+    - Conta requisicoes nos ultimos 60 segundos
+    - Retorna 429 se exceder o limite
+    - Reseta contador apos 60 segundos de inatividade
+ *============================================================================*/
+Method CheckRateLimit(oRequest As Object) As Logical
+  Local cToken     As Character := ""
+  Local cUser      As Character := ""
+  Local oPayload   As Object
+  Local lValid     As Logical := .F.
+  Local nIndex     As Integer := 0
+  Local nNow       As Numeric := 0
+  Local nCount     As Integer := 0
+  Local nLastTime  As Numeric := 0
+  Local nExpireAt  As Numeric := 0
+  
+  If oRequest == Nil
+    Return .T.
+  EndIf
+  
+  cToken := oRequest:GetHeader("Authorization")
+  
+  If Empty(cToken)
+    cToken := oRequest:GetHeader("X-User-Id")
+    If !Empty(cToken)
+      cUser := cToken
+    EndIf
+  Else
+    If At("Bearer ", cToken) > 0
+      cToken := SubStr(cToken, 8)
+    EndIf
+    
+    If !Empty(cToken)
+      lValid := TLPP_ValidateJWT(cToken, @oPayload)
+      
+      If lValid .And. oPayload != Nil
+        cUser := oPayload:GetValue("sub")
+      EndIf
+    EndIf
+  EndIf
+  
+  If Empty(cUser)
+    cUser := "anonymous"
+  EndIf
+  
+  nNow := Seconds()
+  
+  nIndex := AsCan(aRateLimitData, {|x| x[1] == cUser})
+  
+  If nIndex > 0
+    nLastTime := aRateLimitData[nIndex][2]
+    nCount    := aRateLimitData[nIndex][3]
+    nExpireAt := aRateLimitData[nIndex][4]
+    
+    If (nNow - nLastTime) >= nRateLimitWindow
+      nCount    := 0
+      nExpireAt := nNow + nRateLimitWindow
+    EndIf
+    
+    If nNow > nExpireAt
+      nCount := 0
+      nExpireAt := nNow + nRateLimitWindow
+    EndIf
+    
+    If nCount >= nRateLimitMax
+      oRequest:SetStatus(429)
+      oRequest:SetHeader("Retry-After", "60")
+      oRequest:SetBody('{"error":{"code":"RATE_LIMIT_EXCEEDED","message":"Limite de requisicoes excedido. Tente novamente em 60 segundos."}}')
+      Return .F.
+    EndIf
+    
+    nCount := nCount + 1
+    
+    aRateLimitData[nIndex][2] := nNow
+    aRateLimitData[nIndex][3] := nCount
+    aRateLimitData[nIndex][4] := nExpireAt
+  Else
+    nCount    := 1
+    nExpireAt := nNow + nRateLimitWindow
+    
+    AAdd(aRateLimitData, {cUser, nNow, nCount, nExpireAt})
+  EndIf
+  
+  oRequest:SetHeader("X-RateLimit-Limit", AllTrim(Str(nRateLimitMax)))
+  oRequest:SetHeader("X-RateLimit-Remaining", AllTrim(Str(nRateLimitMax - nCount)))
+  oRequest:SetHeader("X-RateLimit-Reset", AllTrim(Str(nExpireAt - nNow)))
+  
+  Return .T.
+
+/*============================================================================*
+  Metodo: ResetUserLimit
+  Descricao: Reseta o contador de rate limit para um usuario especifico
+  
+  Parametros:
+    cUser - Nome do usuario
+  
+  Retorno:
+    Nil
+ *============================================================================*/
+Function ResetUserLimit(cUser As Character) As Logical
+  Local nIndex As Integer := 0
+  
+  If Empty(cUser)
+    Return .F.
+  EndIf
+  
+  nIndex := AsCan(aRateLimitData, {|x| x[1] == cUser})
+  
+  If nIndex > 0
+    ADel(aRateLimitData, nIndex)
+    ASize(aRateLimitData, Len(aRateLimitData) - 1)
+  EndIf
+  
+  Return .T.
+
+/*============================================================================*
+  Metodo: ClearAllLimits
+  Descricao: Limpa todos os contadores de rate limit
+  
+  Parametros:
+    Nenhum
+  
+  Retorno:
+    Nil
+ *============================================================================*/
+Function ClearAllRateLimits() As Logical
+  aRateLimitData := {}
+  Return .T.
+
+Class RateLimitMiddleware
+  Method CheckRateLimit(oRequest)
+EndClass

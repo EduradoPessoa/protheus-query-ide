@@ -1,0 +1,138 @@
+#include "protheus.ch"
+#include "apwebauth.ch"
+
+Class AuthMiddleware
+
+    Public Method ValidateRequest(oRequest As Object) As Logical
+
+EndClass
+
+Method ValidateRequest(oRequest As Object) As Logical
+    Local cToken     As Character
+    Local oPayload   As Object
+    Local cUser      As Character
+    Local lValid     As Logical
+    Local cAuth      As Character
+    Local nBearerPos As Integer
+
+    cAuth := oRequest:GetHeader("Authorization")
+
+    If Empty(cAuth)
+        oRequest:SetStatus(401)
+        oRequest:SetBody('{"error":{"code":"MISSING_TOKEN","message":"Token ausente"}}')
+        LogError("AuthMiddleware: Token ausente na requisicao. IP: " + oRequest:GetIP())
+        Return .F.
+    EndIf
+
+    nBearerPos := At("Bearer ", cAuth)
+    If nBearerPos == 0
+        oRequest:SetStatus(401)
+        oRequest:SetBody('{"error":{"code":"INVALID_TOKEN_FORMAT","message":"Formato Authorization inválido"}}')
+        LogError("AuthMiddleware: Formato de token inválido. IP: " + oRequest:GetIP())
+        Return .F.
+    EndIf
+
+    cToken := SubStr(cAuth, nBearerPos + 7)
+
+    If Empty(cToken)
+        oRequest:SetStatus(401)
+        oRequest:SetBody('{"error":{"code":"MISSING_TOKEN","message":"Token ausente"}}')
+        LogError("AuthMiddleware: Token vazio apos Bearer. IP: " + oRequest:GetIP())
+        Return .F.
+    EndIf
+
+    lValid := TLPP_ValidateJWT(cToken, @oPayload)
+
+    If !lValid
+        oRequest:SetStatus(401)
+        oRequest:SetBody('{"error":{"code":"INVALID_TOKEN","message":"Token inválido ou expirado"}}')
+        LogError("AuthMiddleware: Token JWT inválido ou expirado. IP: " + oRequest:GetIP())
+        Return .F.
+    EndIf
+
+    cUser := oPayload:GetValue("sub")
+
+    If Empty(cUser)
+        oRequest:SetStatus(401)
+        oRequest:SetBody('{"error":{"code":"INVALID_TOKEN","message":"Token sem identificador de usuário"}}')
+        LogError("AuthMiddleware: Token sem campo 'sub'. IP: " + oRequest:GetIP())
+        Return .F.
+    EndIf
+
+    If !HasPQIDEAccess(cUser)
+        oRequest:SetStatus(403)
+        oRequest:SetBody('{"error":{"code":"ACCESS_DENIED","message":"Usuário sem acesso ao ProtheusQuery IDE"}}')
+        LogError("AuthMiddleware: Acesso negado ao usuario " + cUser + ". IP: " + oRequest:GetIP())
+        Return .F.
+    EndIf
+
+    oRequest:SetContextValue("currentUser", cUser)
+    oRequest:SetContextValue("userPayload", oPayload)
+
+    Return .T.
+EndMethod
+
+Static Function HasPQIDEAccess(cUser As Character) As Logical
+    Local lHasAccess As Logical := .F.
+
+    If Empty(cUser)
+        Return .F.
+    EndIf
+
+    lHasAccess := ExistBlock("HASPQIDEACC")
+    If lHasAccess
+        lHasAccess := ExecBlock("HASPQIDEACC", .F., .F., {cUser})
+        If ValType(lHasAccess) != "L"
+            lHasAccess := .F.
+        EndIf
+    Else
+        lHasAccess := CheckPQIDEAccess(cUser)
+    EndIf
+
+    Return lHasAccess
+EndFunction
+
+Static Function CheckPQIDEAccess(cUser As Character) As Logical
+    Local cQuery    As Character
+    Local lRet      As Logical := .F.
+    Local cCodusu   As Character
+    Local cAlias    As Character
+
+    If ValType(cUser) != "C" .Or. Empty(cUser)
+        Return .F.
+    EndIf
+
+    cCodusu := FWGetCode(cUser)
+
+    cQuery := "SELECT COUNT(*) AS QTDE " +;
+              "FROM SYS$BRCOPE " +;
+              "WHERE BRC_ATIVO = '1' " +;
+              "  AND BRC_MODUL = 'SIGACFG' " +;
+              "  AND BRC_USER  = " + EscapeSql(cCodusu) + " " +;
+              "  AND (BRC_SCOPE = 'PQIDE' OR BRC_SCOPE = '*')"
+
+    cAlias := GetNextAlias()
+    TCQuery cQuery New Alias (cAlias)
+
+    If !Empty(cAlias) .And. (cAlias)->(FieldGet(1)) > 0
+        lRet := .T.
+    EndIf
+
+    If !Empty(cAlias)
+        (cAlias)->(DbCloseArea())
+    EndIf
+
+    Return lRet
+EndFunction
+
+Static Function EscapeSql(cValue As Character) As Character
+    If Empty(cValue)
+        Return "''"
+    EndIf
+    cValue := StrTran(cValue, "'", "''")
+    Return "'" + cValue + "'"
+EndFunction
+
+Static Function GetNextAlias() As Character
+    Return "PQA_" + StrTran(Time(), ":", "") + "_" + cValToChar(Randomize(1, 99999))
+EndFunction

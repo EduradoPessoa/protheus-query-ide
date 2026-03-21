@@ -1,0 +1,290 @@
+/*----------------------------------------------------------------------------*
+  ExportController.tlpp
+  Controller REST para exportacao de resultados de queries
+  
+  Endpoint: POST /api/pqide/v1/export
+  
+  Funcionalidades:
+  - Recebe executionId e formato (xlsx/csv)
+  - Busca SQL original na tabela PQHIST
+  - Re-executa a query via QueryService
+  - Gera arquivo para download
+  
+  Dependencias:
+  - HistoryService: Busca SQL no historico
+  - QueryService: Re-executa a query
+  - ExportService: Gera arquivo de exportacao
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+#include "tlpp-core.tlpp"
+
+#define METHOD_POST "POST"
+
+#define STATUS_200 200
+#define STATUS_400 400
+#define STATUS_404 404
+#define STATUS_422 422
+#define STATUS_500 500
+
+#define ERR_INVALID_INPUT  "INVALID_INPUT"
+#define ERR_NOT_FOUND      "NOT_FOUND"
+#define ERR_EXECUTION_FAILED "QUERY_EXECUTION_FAILED"
+#define ERR_EXPORT_FAILED "EXPORT_FAILED"
+#define ERR_FORMAT_INVALID "FORMAT_INVALID"
+
+Static cEndpoint := "/api/pqide/v1/export"
+
+/*============================================================================*
+  Funcao: U_EXPORT_CONTROLLER
+  Descricao: Factory para criacao de instancia do controller
+ *============================================================================*/
+Function U_EXPORT_CONTROLLER()
+Return(ExportController():New())
+
+/*============================================================================*
+  Construtor
+ *============================================================================*/
+Method New() Class ExportController
+Return(Self)
+
+/*============================================================================*
+  Metodo: OnRequest
+  Descricao: Hook chamado pelo framework REST para processar requisicoes
+ *============================================================================*/
+Method OnRequest(cMethod As Character) As Logical
+  Local cRoute As Character := Upper(FwRest():GetUri())
+  
+  Do Case
+    Case cMethod == METHOD_POST .And. "export" $ cRoute
+      Return Self:ExportFile()
+    
+    Otherwise
+      Return .F.
+  EndCase
+  
+Return .F.
+
+/*============================================================================*
+  Metodo: ExportFile
+  Descricao: Gera arquivo de exportacao para download
+  
+  Request Body:
+    {
+      "executionId": "uuid-da-execucao",
+      "format": "xlsx" | "csv"
+    }
+  
+  Response 200 - Sucesso:
+    - Content-Type: application/octet-stream ou application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+    - Content-Disposition: attachment; filename="export_<timestamp>.<extensao>"
+    - Body: Arquivo binario
+  
+  Response 400/404/422 - Erro:
+    {
+      "error": {
+        "code": "ERR_CODE",
+        "message": "Mensagem de erro"
+      }
+    }
+ *============================================================================*/
+Method ExportFile() As Logical
+  Local cBody     As Character := ""
+  Local oRequest  As Object    := Nil
+  Local cExecutionId As Character := ""
+  Local cFormat   As Character := ""
+  Local oHistory  As Object    := Nil
+  Local cSql      As Character := ""
+  Local cDatabase As Character := ""
+  Local oQueryResult As Object := Nil
+  Local cFilePath As Character := ""
+  Local lSuccess  As Logical  := .F.
+  
+  cBody := FwRest():GetBody()
+  
+  If Empty(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Request body vazio ou invalido")
+  EndIf
+  
+  oRequest := JsonObject():New()
+  
+  If !oRequest:FromJson(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "JSON invalido no request body")
+  EndIf
+  
+  cExecutionId := oRequest:GetValue("executionId", "")
+  cFormat      := Lower(AllTrim(oRequest:GetValue("format", "csv")))
+  
+  If Empty(cExecutionId)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "executionId nao fornecido")
+  EndIf
+  
+  If Empty(cFormat)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "format nao fornecido")
+  EndIf
+  
+  If !(cFormat $ "xlsx,csv")
+    Return Self:SendError(STATUS_422, ERR_FORMAT_INVALID, "Formato invalido. Use: xlsx ou csv")
+  EndIf
+  
+  oHistory := HistoryService():GetHistoryById(cExecutionId)
+  
+  If Empty(oHistory:Get("id"))
+    Return Self:SendError(STATUS_404, ERR_NOT_FOUND, "Execucao nao encontrada no historico")
+  EndIf
+  
+  cSql := oHistory:Get("sql")
+  cDatabase := oHistory:Get("banco")
+  
+  If Empty(cSql)
+    Return Self:SendError(STATUS_422, ERR_INVALID_INPUT, "SQL nao encontrado para a execucao")
+  EndIf
+  
+  oQueryResult := QueryService():ExecuteSelect(cSql, cDatabase, 10000, 60)
+  
+  If !oQueryResult:success
+    Return Self:SendError(STATUS_422, ERR_EXECUTION_FAILED, ;
+              IfEmpty(oQueryResult:error, "Erro ao re-executar query"))
+  EndIf
+  
+  cFilePath := ExportService():GenerateFile(oQueryResult, cFormat)
+  
+  If Empty(cFilePath)
+    Return Self:SendError(STATUS_500, ERR_EXPORT_FAILED, "Erro ao gerar arquivo de exportacao")
+  EndIf
+  
+  Return Self:SendFile(cFilePath, cFormat)
+
+/*============================================================================*
+  Metodo: SendFile
+  Descricao: Envia arquivo para download
+  
+  Parametros:
+    cFilePath - Caminho completo do arquivo
+    cFormat   - Formato do arquivo (xlsx/csv)
+  
+  Retorno:
+    Logical - .T. se sucesso
+ *============================================================================*/
+Method SendFile(cFilePath As Character, cFormat As Character) As Logical
+  Local cFileName  As Character := ""
+  Local cContentType As Character := ""
+  Local cTimeStamp As Character := ""
+  Local nHandle    As Numeric := 0
+  Local nFileSize  As Numeric := 0
+  Local cBoundary  As Character := ""
+  Local cHeader    As Character := ""
+  Local aFileData  As Array := {}
+  Local i          As Integer := 0
+  
+  If Empty(cFilePath) .Or. !File(cFilePath)
+    Return Self:SendError(STATUS_500, ERR_EXPORT_FAILED, "Arquivo nao encontrado para download")
+  EndIf
+  
+  cTimeStamp := DToS(Date()) + "_" + StrTran(Time(), ":", "")
+  cFileName := "export_" + cTimeStamp + "." + cFormat
+  
+  Do Case
+    Case cFormat == "xlsx"
+      cContentType := "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    Case cFormat == "csv"
+      cContentType := "text/csv"
+    Otherwise
+      cContentType := "application/octet-stream"
+  EndCase
+  
+  nHandle := FOpen(cFilePath, FO_READ)
+  
+  If nHandle < 0
+    Return Self:SendError(STATUS_500, ERR_EXPORT_FAILED, "Erro ao abrir arquivo para download")
+  EndIf
+  
+  nFileSize := FSeek(nHandle, 0, FS_END)
+  FSeek(nHandle, 0, FS_SET)
+  
+  aFileData := {}
+  
+  For i := 1 To nFileSize
+    AAdd(aFileData, Chr(FRead(nHandle)))
+  Next i
+  
+  FClose(nHandle)
+  
+  cBoundary := SubStr(CriaGUID(), 2, 36)
+  
+  cHeader := "attachment; filename=" + cFileName
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType(cContentType)
+  FwRest():SetHeader("Content-Disposition", cHeader)
+  FwRest():SetHeader("Content-Length", cValToChar(nFileSize))
+  
+  FwRest():SetResponse(ConArr(aFileData))
+  
+  If !Empty(cFilePath)
+    FErase(cFilePath)
+  EndIf
+
+Return .T.
+
+/*============================================================================*
+  Metodo: SendError
+  Descricao: Envia resposta de erro
+  
+  Parametros:
+    nStatus  - Codigo HTTP de erro
+    cCode    - Codigo de erro interno
+    cMessage - Mensagem de erro
+  
+  Retorno:
+    Logical - .F. (sempre)
+ *============================================================================*/
+Method SendError(nStatus As Numeric, cCode As Character,;
+                 cMessage As Character) As Logical
+  Local cJson  As Character := ""
+  Local oError As Object    := JsonObject():New()
+  Local oResp  As Object    := JsonObject():New()
+  
+  oError["code"]    := cCode
+  oError["message"] := cMessage
+  
+  oResp["error"] := oError
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(nStatus)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oError:Destroy()
+  oResp:Destroy()
+  
+Return .F.
+
+/*============================================================================*
+  Funcao: ConArr
+  Descricao: Converte array de caracteres em string
+  
+  Parametros:
+    aArray - Array de caracteres
+  
+  Retorno:
+    Character - String concatenada
+ *============================================================================*/
+Static Function ConArr(aArray As Array) As Character
+  Local cRet := ""
+  Local i   As Integer
+  
+  For i := 1 To Len(aArray)
+    cRet += aArray[i]
+  Next i
+  
+Return cRet
+
+Class ExportController
+  Method New()
+  Method OnRequest(cMethod)
+  Method ExportFile()
+  Method SendFile(cFilePath, cFormat)
+  Method SendError(nStatus, cCode, cMessage)
+EndClass

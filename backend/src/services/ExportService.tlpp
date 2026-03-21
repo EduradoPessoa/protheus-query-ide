@@ -1,0 +1,452 @@
+/*----------------------------------------------------------------------------*
+  ExportService.tlpp
+  Servico para geracao de arquivos de exportacao (XLSX e CSV)
+  
+  Funcionalidades:
+  - Gerar arquivo Excel (XLSX) a partir de resultado de query
+  - Gerar arquivo CSV a partir de resultado de query
+  - Re-executar query se dados nao forem fornecidos
+  - Retornar stream do arquivo para download
+  
+  Dependencias:
+  - QueryService: Execucao da query (se re-executar)
+  - SqlDialectHelper: Aplicacao de limite de linhas
+  - ConnectionHelper: Conexao com banco externo
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+#include "tlpp-core.tlpp"
+
+#define EXPORT_MAX_ROWS 50000
+
+namespace services
+
+/*============================================================================*
+  Funcao: U_EXPORT_SERVICE
+  Descricao: Factory para criacao de instancia do servico
+ *============================================================================*/
+Function U_EXPORT_SERVICE()
+Return(ExportService():New())
+
+/============================================================================*
+  Construtor
+ *============================================================================*/
+Method New() Class ExportService
+Return(Self)
+
+/*============================================================================*
+  Metodo: GenerateXlsx
+  Descricao: Gera arquivo Excel (XLSX) a partir de resultado de query
+  
+  Parametros:
+    cSql      - Query SQL a ser executada (opcional se aRows fornecido)
+    cDatabase - Banco de dados ("default", "oracle", "postgres")
+    aColumns  - Array de colunas (opcional se re-executar query)
+    aRows     - Array de linhas (opcional se re-executar query)
+  
+  Retorno:
+    Object - Objeto com success, fileName, contentType e stream (base64)
+  
+  Exemplos:
+    oResult := ExportService():GenerateXlsx("SELECT * FROM SA1", "default", nil, nil)
+    oResult := ExportService():GenerateXlsx("", "default", aCols, aRows)
+ *============================================================================*/
+Method GenerateXlsx(cSql As Character, cDatabase As Character,;
+                    aColumns As Array, aRows As Array) As Object
+  Local oResult    As Object := JsonObject():New()
+  Local cFileName  As Character := ""
+  Local cXml       As Character := ""
+  Local cStream    As Character := ""
+  Local nRow       As Integer := 1
+  Local nCol       As Integer
+  Local xValue     As Dynamic
+  Local cValue     As Character
+  Local lExternal  As Logical := .F.
+  Local oConnHelper As Object
+  Local cAlias     As Character := ""
+  Local cWrkAlias  As Character := ""
+  Local cFinalSql  As Character
+  Local cErrorMsg  As Character
+  
+  Default cSql      := ""
+  Default cDatabase := "default"
+  Default aColumns  := {}
+  Default aRows     := {}
+  
+  oResult["success"] := .F.
+  
+  If Len(aRows) == 0 .And. Len(aColumns) == 0
+    If Empty(cSql)
+      oResult["error"] := "SQL ou dados devem ser fornecidos"
+      Return oResult
+    EndIf
+    
+    lExternal := !Empty(cDatabase) .And. Lower(AllTrim(cDatabase)) != "default"
+    
+    If lExternal
+      oConnHelper := ConnectionHelper():New()
+      cAlias := oConnHelper:Connect(cDatabase)
+    EndIf
+    
+    Try
+      cFinalSql := SqlDialectHelper():ApplyRowLimit(cSql, EXPORT_MAX_ROWS, cDatabase)
+      cFinalSql := TCGenQry(cFinalSql)
+      
+      cWrkAlias := GetNextAlias()
+      TCSqlOpen(cFinalSql, cWrkAlias, .T., 60)
+      
+      aColumns := ResultSetHelper():GetColumns(cWrkAlias)
+      aRows := ResultSetHelper():GetRows(cWrkAlias, EXPORT_MAX_ROWS)
+      
+      If Select(cWrkAlias) > 0
+        (cWrkAlias)->(DbCloseArea())
+      EndIf
+      
+    Catch oError
+      cErrorMsg := TCSqlError()
+      If Empty(cErrorMsg)
+        cErrorMsg := oError:Description
+      EndIf
+      oResult["error"] := "Falha ao executar query: " + cErrorMsg
+      
+      LogError("ExportService", "GenerateXlsx falhou: " + cErrorMsg)
+      
+    Finally
+      If lExternal .And. oConnHelper != Nil
+        oConnHelper:Disconnect(cAlias)
+      EndIf
+    EndTry
+    
+    If !oResult["success"] .And. Empty(oResult["error"])
+      oResult["error"] := "Falha ao obter dados"
+      Return oResult
+    EndIf
+  EndIf
+  
+  If Len(aColumns) == 0 .Or. Len(aRows) == 0
+    oResult["error"] := "Dados insuficientes para geracao do XLSX"
+    Return oResult
+  EndIf
+  
+  Try
+    cFileName := "export_" + StrTran(Time(), ":", "-") + ".xlsx"
+    
+    cXml := '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    cXml += '<Worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+    cXml += '<SheetData>'
+    
+    cXml += '<Row>'
+    For nCol := 1 To Len(aColumns)
+      cValue := Self:GetColumnName(aColumns, nCol)
+      cXml += '<Cell><Data ss:Type="String">' + HtmlEncode(cValue) + '</Data></Cell>'
+    Next nCol
+    cXml += '</Row>'
+    
+    For nRow := 1 To Len(aRows)
+      xValue := aRows[nRow]
+      cXml += '<Row>'
+      For nCol := 1 To Len(xValue)
+        cValue := Self:FormatValue(xValue[nCol])
+        cXml += '<Cell><Data ss:Type="String">' + HtmlEncode(cValue) + '</Data></Cell>'
+      Next nCol
+      cXml += '</Row>'
+    Next nRow
+    
+    cXml += '</SheetData>'
+    cXml += '</Worksheet>'
+    
+    cStream := Encode64(cXml)
+    
+    oResult["success"]      := .T.
+    oResult["fileName"]     := cFileName
+    oResult["contentType"]  := "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    oResult["stream"]       := cStream
+    oResult["rowCount"]     := Len(aRows)
+    
+    LogInfo("ExportService", "Arquivo XLSX gerado: " + cFileName + " (" + cValToChar(Len(aRows)) + " linhas)")
+    
+  Catch oError
+    oResult["error"] := "Erro ao gerar XLSX: " + oError:Description
+    LogError("ExportService", "GenerateXlsx falhou: " + oError:Description)
+  EndTry
+  
+  Return oResult
+
+/*============================================================================*
+  Metodo: GenerateCsv
+  Descricao: Gera arquivo CSV a partir de resultado de query
+  
+  Parametros:
+    cSql      - Query SQL a ser executada (opcional se aRows fornecido)
+    cDatabase - Banco de dados ("default", "oracle", "postgres")
+    aColumns  - Array de colunas (opcional se re-executar query)
+    aRows     - Array de linhas (opcional se re-executar query)
+  
+  Retorno:
+    Object - Objeto com success, fileName, contentType e stream (base64)
+  
+  Exemplos:
+    oResult := ExportService():GenerateCsv("SELECT * FROM SA1", "default", nil, nil)
+    oResult := ExportService():GenerateCsv("", "default", aCols, aRows)
+ *============================================================================*/
+Method GenerateCsv(cSql As Character, cDatabase As Character,;
+                   aColumns As Array, aRows As Array) As Object
+  Local oResult    As Object := JsonObject():New()
+  Local cFileName  As Character := ""
+  Local cCsvContent As Character := ""
+  Local cStream    As Character := ""
+  Local nRow       As Integer
+  Local nCol       As Integer
+  Local xValue     As Dynamic
+  Local cValue     As Character
+  Local lExternal  As Logical := .F.
+  Local oConnHelper As Object
+  Local cAlias     As Character := ""
+  Local cWrkAlias  As Character := ""
+  Local cFinalSql  As Character
+  Local cErrorMsg  As Character
+  
+  Default cSql      := ""
+  Default cDatabase := "default"
+  Default aColumns  := {}
+  Default aRows     := {}
+  
+  oResult["success"] := .F.
+  
+  If Len(aRows) == 0 .And. Len(aColumns) == 0
+    If Empty(cSql)
+      oResult["error"] := "SQL ou dados devem ser fornecidos"
+      Return oResult
+    EndIf
+    
+    lExternal := !Empty(cDatabase) .And. Lower(AllTrim(cDatabase)) != "default"
+    
+    If lExternal
+      oConnHelper := ConnectionHelper():New()
+      cAlias := oConnHelper:Connect(cDatabase)
+    EndIf
+    
+    Try
+      cFinalSql := SqlDialectHelper():ApplyRowLimit(cSql, EXPORT_MAX_ROWS, cDatabase)
+      cFinalSql := TCGenQry(cFinalSql)
+      
+      cWrkAlias := GetNextAlias()
+      TCSqlOpen(cFinalSql, cWrkAlias, .T., 60)
+      
+      aColumns := ResultSetHelper():GetColumns(cWrkAlias)
+      aRows := ResultSetHelper():GetRows(cWrkAlias, EXPORT_MAX_ROWS)
+      
+      If Select(cWrkAlias) > 0
+        (cWrkAlias)->(DbCloseArea())
+      EndIf
+      
+    Catch oError
+      cErrorMsg := TCSqlError()
+      If Empty(cErrorMsg)
+        cErrorMsg := oError:Description
+      EndIf
+      oResult["error"] := "Falha ao executar query: " + cErrorMsg
+      
+      LogError("ExportService", "GenerateCsv falhou: " + cErrorMsg)
+      
+    Finally
+      If lExternal .And. oConnHelper != Nil
+        oConnHelper:Disconnect(cAlias)
+      EndIf
+    EndTry
+    
+    If !oResult["success"] .And. Empty(oResult["error"])
+      oResult["error"] := "Falha ao obter dados"
+      Return oResult
+    EndIf
+  EndIf
+  
+  If Len(aColumns) == 0 .Or. Len(aRows) == 0
+    oResult["error"] := "Dados insuficientes para geracao do CSV"
+    Return oResult
+  EndIf
+  
+  Try
+    cFileName := "export_" + StrTran(Time(), ":", "-") + ".csv"
+    
+    For nCol := 1 To Len(aColumns)
+      cValue := Self:GetColumnName(aColumns, nCol)
+      cValue := Self:EscapeCsvField(cValue)
+      cCsvContent += cValue
+      If nCol < Len(aColumns)
+        cCsvContent += ";"
+      EndIf
+    Next nCol
+    cCsvContent += CRLF
+    
+    For nRow := 1 To Len(aRows)
+      xValue := aRows[nRow]
+      For nCol := 1 To Len(xValue)
+        cValue := Self:FormatValue(xValue[nCol])
+        cValue := Self:EscapeCsvField(cValue)
+        cCsvContent += cValue
+        If nCol < Len(xValue)
+          cCsvContent += ";"
+        EndIf
+      Next nCol
+      cCsvContent += CRLF
+    Next nRow
+    
+    cStream := Encode64(cCsvContent)
+    
+    oResult["success"]      := .T.
+    oResult["fileName"]     := cFileName
+    oResult["contentType"]  := "text/csv; charset=utf-8"
+    oResult["stream"]       := cStream
+    oResult["rowCount"]     := Len(aRows)
+    
+    LogInfo("ExportService", "Arquivo CSV gerado: " + cFileName + " (" + cValToChar(Len(aRows)) + " linhas)")
+    
+  Catch oError
+    oResult["error"] := "Erro ao gerar CSV: " + oError:Description
+    LogError("ExportService", "GenerateCsv falhou: " + oError:Description)
+  EndTry
+  
+  Return oResult
+
+/*============================================================================*
+  Metodo: GetColumnName
+  Descricao: Obtem nome da coluna pelo indice
+  
+  Parametros:
+    aColumns - Array de colunas
+    nIndex   - Indice da coluna (1-based)
+  
+  Retorno:
+    Character - Nome da coluna
+ *============================================================================*/
+Method GetColumnName(aColumns As Array, nIndex As Integer) As Character
+  Local oCol As Object
+  
+  If nIndex > Len(aColumns)
+    Return ""
+  EndIf
+  
+  oCol := aColumns[nIndex]
+  
+  If oCol != Nil .And. oCol:HasProperty("name")
+    Return oCol:GetValue("name", "")
+  EndIf
+  
+  Return ""
+
+/*============================================================================*
+  Metodo: FormatValue
+  Descricao: Formata valor para exibicao no arquivo
+  
+  Parametros:
+    xValue - Valor a ser formatado
+  
+  Retorno:
+    Character - Valor formatado como string
+ *============================================================================*/
+Method FormatValue(xValue As Dynamic) As Character
+  Local cType   As Character := ValType(xValue)
+  Local cRet    As Character := ""
+  
+  Do Case
+    Case cType == "C" .Or. cType == "M"
+      cRet := AllTrim(xValue)
+      
+    Case cType == "N"
+      cRet := AllTrim(Str(xValue))
+      
+    Case cType == "D"
+      If Empty(xValue)
+        cRet := ""
+      Else
+        cRet := DToC(xValue)
+      EndIf
+      
+    Case cType == "L"
+      cRet := If(xValue, "1", "0")
+      
+    Case cType == "U"
+      cRet := ""
+      
+    Otherwise
+      cRet := AllTrim(CStr(xValue))
+  EndCase
+  
+  Return cRet
+
+/*============================================================================*
+  Metodo: EscapeCsvField
+  Descricao: Escapa campo para CSV
+  
+  Parametros:
+    cValue - Valor a ser escapado
+  
+  Retorno:
+    Character - Valor escapado
+ *============================================================================*/
+Method EscapeCsvField(cValue As Character) As Character
+  Local cRet As Character
+  
+  Default cValue := ""
+  
+  cValue := AllTrim(cValue)
+  
+  If ";" $ cValue .Or. '"' $ cValue .Or. Chr(13) $ cValue .Or. Chr(10) $ cValue
+    cRet := '"' + StrTran(cValue, '"', '""') + '"'
+  Else
+    cRet := cValue
+  EndIf
+  
+  Return cRet
+
+/*============================================================================*
+  Funcao: HtmlEncode
+  Descricao: Codifica caracteres especiais para HTML
+  
+  Parametros:
+    cValue - String a ser codificada
+  
+  Retorno:
+    Character - String codificada
+ *============================================================================*/
+Static Function HtmlEncode(cValue As Character) As Character
+  Local cRet As Character := ""
+  
+  Default cValue := ""
+  
+  cRet := cValue
+  cRet := StrTran(cRet, "&", "&amp;")
+  cRet := StrTran(cRet, "<", "&lt;")
+  cRet := StrTran(cRet, ">", "&gt;")
+  cRet := StrTran(cRet, '"', "&quot;")
+  cRet := StrTran(cRet, "'", "&apos;")
+  
+Return cRet
+
+/*============================================================================*
+  Funcao: LogInfo
+  Descricao: Registra informacao no log
+ *============================================================================*/
+Static Function LogInfo(cContext As Character, cMessage As Character)
+  ConOut("[" + dToC(Date()) + " " + Time() + "] [INFO] [" + cContext + "] " + cMessage)
+Return
+
+/*============================================================================*
+  Funcao: LogError
+  Descricao: Registra erro no log
+ *============================================================================*/
+Static Function LogError(cContext As Character, cMessage As Character)
+  ConOut("[" + dToC(Date()) + " " + Time() + "] [ERROR] [" + cContext + "] " + cMessage)
+Return
+
+namespace end
+
+Class ExportService
+  Method New()
+  Method GenerateXlsx(cSql, cDatabase, aColumns, aRows)
+  Method GenerateCsv(cSql, cDatabase, aColumns, aRows)
+  Method GetColumnName(aColumns, nIndex)
+  Method FormatValue(xValue)
+  Method EscapeCsvField(cValue)
+EndClass
