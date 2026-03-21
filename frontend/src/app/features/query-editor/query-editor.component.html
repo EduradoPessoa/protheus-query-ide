@@ -1,0 +1,8 @@
+<div class="pq-editor-wrapper">
+  <po-divider p-label="SQL Editor"></po-divider>
+  <ngx-monaco-editor
+    [options]="editorOptions"
+    [(ngModel)]="sqlContent"
+    (onInit)="onEditorInit($event)">
+  </ngx-monaco-editor>
+</div>

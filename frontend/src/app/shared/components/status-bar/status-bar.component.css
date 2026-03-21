@@ -1,0 +1,27 @@
+.pq-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background-color: #fff;
+  border-top: 1px solid #e0e0e0;
+  min-height: 40px;
+  font-family: 'Roboto', sans-serif;
+  font-size: 14px;
+}
+
+.pq-executing-text {
+  margin-left: 8px;
+  color: #666;
+}
+
+.pq-meta {
+  color: #666;
+  font-size: 13px;
+}
+
+.pq-meta-error {
+  color: #c62828;
+  font-size: 13px;
+  font-weight: 500;
+}

@@ -21,6 +21,7 @@
     "@po-ui/ng-components": "^17.26.28",
     "@po-ui/ng-storage": "^17.26.28",
     "@po-ui/ng-templates": "^17.26.28",
+    "ngx-monaco-editor": "^12.0.0",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
     "zone.js": "~0.14.3"

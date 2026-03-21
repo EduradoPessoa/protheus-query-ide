@@ -1,0 +1,9 @@
+.pq-toolbar-selects {
+  display: flex;
+  gap: 16px;
+  margin-left: 16px;
+}
+
+.pq-toolbar-selects po-select {
+  min-width: 150px;
+}

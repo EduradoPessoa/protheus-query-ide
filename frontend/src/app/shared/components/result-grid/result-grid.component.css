@@ -1,0 +1,11 @@
+.result-grid-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-grid-header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}

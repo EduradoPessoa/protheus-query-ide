@@ -1,0 +1,38 @@
+<div class="pq-status-bar">
+  <!-- Estado: idle -->
+  <ng-container *ngIf="status === 'idle'">
+    <po-tag p-label="Pronto" [p-color]="getIdleStatusColor()"></po-tag>
+  </ng-container>
+
+  <!-- Estado: executando -->
+  <ng-container *ngIf="status === 'executing'">
+    <po-loading [p-size]="'sm'"></po-loading>
+    <span class="pq-executing-text">Executando...</span>
+  </ng-container>
+
+  <!-- Estado: sucesso -->
+  <ng-container *ngIf="status === 'success' && queryType">
+    <po-tag 
+      [p-label]="queryType" 
+      [p-color]="getQueryTypeColor()"
+      [p-icon]="getQueryTypeIcon()">
+    </po-tag>
+    <po-badge 
+      *ngIf="rowCount !== null" 
+      [p-value]="rowCount" 
+      [p-color]="'color-08'">
+    </po-badge>
+    <span class="pq-meta" *ngIf="rowCount !== null && executionTime !== null">
+      {{ rowCount }} linhas &bull; {{ executionTime }}ms
+    </span>
+    <span class="pq-meta" *ngIf="rowCount === null && executionTime !== null">
+      {{ executionTime }}ms
+    </span>
+  </ng-container>
+
+  <!-- Estado: erro -->
+  <ng-container *ngIf="status === 'error'">
+    <po-tag p-label="ERRO" [p-color]="getErrorStatusColor()"></po-tag>
+    <span class="pq-meta-error" *ngIf="errorMessage">{{ errorMessage }}</span>
+  </ng-container>
+</div>

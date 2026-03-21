@@ -1,0 +1,19 @@
+<div class="result-grid-container">
+  <div class="result-grid-header">
+    <po-badge
+      p-label="Linhas"
+      [p-value]="rowCount"
+      p-color="color-08">
+    </po-badge>
+  </div>
+  
+  <po-table
+    [p-columns]="columns"
+    [p-items]="processedRows"
+    [p-loading]="loading"
+    [p-sortable]="true"
+    [p-striped]="true"
+    p-height="350"
+    [p-show-more]="false">
+  </po-table>
+</div>

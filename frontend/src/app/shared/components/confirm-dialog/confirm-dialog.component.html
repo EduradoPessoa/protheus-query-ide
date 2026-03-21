@@ -1,0 +1,27 @@
+<po-modal
+  #confirmModal
+  p-title="Confirmar execução"
+  [p-primary-action]="confirmAction"
+  [p-secondary-action]="cancelAction"
+  [p-click-out]="false">
+
+  <po-info
+    p-label="Tipo de operação"
+    [p-value]="queryType">
+  </po-info>
+
+  <po-info
+    p-label="Banco de dados alvo"
+    [p-value]="targetDatabase">
+  </po-info>
+
+  <po-divider p-label="Query que será executada"></po-divider>
+
+  <pre class="pq-confirm-sql">{{ sqlPreview }}</pre>
+
+  <po-alert
+    p-type="warning"
+    p-message="Esta operação pode ser irreversível. Confirme antes de prosseguir.">
+  </po-alert>
+
+</po-modal>
