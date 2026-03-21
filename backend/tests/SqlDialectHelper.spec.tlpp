@@ -1,0 +1,212 @@
+/*----------------------------------------------------------------------------*
+  SqlDialectHelper.spec.tlpp
+  Testes unitarios para SqlDialectHelper
+
+  Metodo testado:
+  - ApplyRowLimit(cSql, nMax, cDatabase)
+
+  Cenarios:
+  - SQL Server (default/sqlserver): SELECT TOP N
+  - Oracle: SELECT ... FETCH FIRST N ROWS ONLY
+  - PostgreSQL: SELECT ... LIMIT N
+  - Edge cases: SQL vazio, nMax <= 0, nao-SELECT, limite duplicado
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+Static nPassed := 0
+Static nFailed := 0
+Static aErrors := {}
+
+/*----------------------------------------------------------------------------*
+  Runner principal
+*----------------------------------------------------------------------------*/
+Function RunSqlDialectHelperTests()
+
+  nPassed := 0
+  nFailed := 0
+  aErrors := {}
+
+  ConOut("=== SqlDialectHelper Tests ===")
+
+  // Default / SQL Server
+  TestApplyRowLimit_Default_AddsTop()
+  TestApplyRowLimit_SqlServer_AddsTop()
+  TestApplyRowLimit_Default_AlreadyHasTop_NoDuplicate()
+  TestApplyRowLimit_Default_TopWithSpaces()
+
+  // Oracle
+  TestApplyRowLimit_Oracle_AddsFetchFirst()
+  TestApplyRowLimit_Oracle_AlreadyHasFetch_NoDuplicate()
+
+  // PostgreSQL
+  TestApplyRowLimit_Postgres_AddsLimit()
+  TestApplyRowLimit_Postgres_AlreadyHasLimit_NoDuplicate()
+
+  // Edge cases
+  TestApplyRowLimit_EmptySql_ReturnsEmpty()
+  TestApplyRowLimit_ZeroMax_ReturnsOriginal()
+  TestApplyRowLimit_NegativeMax_ReturnsOriginal()
+  TestApplyRowLimit_NonSelect_ReturnsOriginal()
+  TestApplyRowLimit_InsertStatement_Unmodified()
+  TestApplyRowLimit_UnknownDatabase_DefaultsToTop()
+  TestApplyRowLimit_WhitespaceSql_Handled()
+
+  // Resumo
+  ConOut("")
+  ConOut("=== Resultado: " + cValToChar(nPassed) + " passaram, " + ;
+         cValToChar(nFailed) + " falharam ===")
+
+  If Len(aErrors) > 0
+    ConOut("--- Falhas ---")
+    AEval(aErrors, {|e| ConOut("  FAIL: " + e)})
+  EndIf
+
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Helpers de assert
+*----------------------------------------------------------------------------*/
+Static Function AssertEquals(cTest, xExpected, xActual)
+  If xExpected == xActual
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (esperado: '" + cValToChar(xExpected) + ;
+         "', obtido: '" + cValToChar(xActual) + "')")
+  EndIf
+Return Nil
+
+Static Function AssertContains(cTest, cHaystack, cNeedle)
+  If Upper(cNeedle) $ Upper(cHaystack)
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (substring '" + cNeedle + "' nao encontrada em '" + ;
+         cHaystack + "')")
+  EndIf
+Return Nil
+
+Static Function AssertNotContains(cTest, cHaystack, cNeedle)
+  If !(Upper(cNeedle) $ Upper(cHaystack))
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (substring '" + cNeedle + "' inesperada em '" + ;
+         cHaystack + "')")
+  EndIf
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: Default / SQL Server
+*----------------------------------------------------------------------------*/
+Static Function TestApplyRowLimit_Default_AddsTop()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("SELECT * FROM SA1", 100, "default")
+  AssertContains("Default: adiciona TOP 100", cResult, "TOP 100")
+Return Nil
+
+Static Function TestApplyRowLimit_SqlServer_AddsTop()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("SELECT * FROM SA1", 50, "sqlserver")
+  AssertContains("SqlServer: adiciona TOP 50", cResult, "TOP 50")
+Return Nil
+
+Static Function TestApplyRowLimit_Default_AlreadyHasTop_NoDuplicate()
+  Local oHelper := SqlDialectHelper():New()
+  Local cSql    := "SELECT TOP 50 * FROM SA1"
+  Local cResult := oHelper:ApplyRowLimit(cSql, 100, "default")
+  AssertEquals("Default: nao duplica TOP", cSql, cResult)
+Return Nil
+
+Static Function TestApplyRowLimit_Default_TopWithSpaces()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("SELECT A1_COD, A1_NOME FROM SA1", 25, "default")
+  AssertContains("Default: TOP com colunas", cResult, "TOP 25")
+  AssertContains("Default: mantem colunas", cResult, "A1_COD")
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: Oracle
+*----------------------------------------------------------------------------*/
+Static Function TestApplyRowLimit_Oracle_AddsFetchFirst()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("SELECT * FROM SA1", 200, "oracle")
+  AssertContains("Oracle: adiciona FETCH FIRST 200 ROWS ONLY", cResult, ;
+    "FETCH FIRST 200 ROWS ONLY")
+Return Nil
+
+Static Function TestApplyRowLimit_Oracle_AlreadyHasFetch_NoDuplicate()
+  Local oHelper := SqlDialectHelper():New()
+  Local cSql    := "SELECT * FROM SA1 FETCH FIRST 50 ROWS ONLY"
+  Local cResult := oHelper:ApplyRowLimit(cSql, 100, "oracle")
+  AssertEquals("Oracle: nao duplica FETCH", cSql, cResult)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: PostgreSQL
+*----------------------------------------------------------------------------*/
+Static Function TestApplyRowLimit_Postgres_AddsLimit()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("SELECT * FROM SA1", 75, "postgres")
+  AssertContains("Postgres: adiciona LIMIT 75", cResult, "LIMIT 75")
+Return Nil
+
+Static Function TestApplyRowLimit_Postgres_AlreadyHasLimit_NoDuplicate()
+  Local oHelper := SqlDialectHelper():New()
+  Local cSql    := "SELECT * FROM SA1 LIMIT 50"
+  Local cResult := oHelper:ApplyRowLimit(cSql, 100, "postgres")
+  AssertEquals("Postgres: nao duplica LIMIT", cSql, cResult)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: Edge Cases
+*----------------------------------------------------------------------------*/
+Static Function TestApplyRowLimit_EmptySql_ReturnsEmpty()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("", 100, "default")
+  AssertEquals("SQL vazio retorna vazio", "", cResult)
+Return Nil
+
+Static Function TestApplyRowLimit_ZeroMax_ReturnsOriginal()
+  Local oHelper := SqlDialectHelper():New()
+  Local cSql    := "SELECT * FROM SA1"
+  Local cResult := oHelper:ApplyRowLimit(cSql, 0, "default")
+  AssertEquals("nMax=0 retorna SQL original", cSql, cResult)
+Return Nil
+
+Static Function TestApplyRowLimit_NegativeMax_ReturnsOriginal()
+  Local oHelper := SqlDialectHelper():New()
+  Local cSql    := "SELECT * FROM SA1"
+  Local cResult := oHelper:ApplyRowLimit(cSql, -10, "default")
+  AssertEquals("nMax negativo retorna SQL original", cSql, cResult)
+Return Nil
+
+Static Function TestApplyRowLimit_NonSelect_ReturnsOriginal()
+  Local oHelper := SqlDialectHelper():New()
+  Local cSql    := "UPDATE SA1 SET A1_NOME = 'TESTE'"
+  Local cResult := oHelper:ApplyRowLimit(cSql, 100, "default")
+  AssertEquals("UPDATE retorna SQL original", cSql, cResult)
+Return Nil
+
+Static Function TestApplyRowLimit_InsertStatement_Unmodified()
+  Local oHelper := SqlDialectHelper():New()
+  Local cSql    := "INSERT INTO SA1 (A1_COD) VALUES ('001')"
+  Local cResult := oHelper:ApplyRowLimit(cSql, 100, "oracle")
+  AssertEquals("INSERT retorna SQL original", cSql, cResult)
+Return Nil
+
+Static Function TestApplyRowLimit_UnknownDatabase_DefaultsToTop()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("SELECT * FROM SA1", 10, "mongodb")
+  AssertContains("DB desconhecido usa TOP", cResult, "TOP 10")
+Return Nil
+
+Static Function TestApplyRowLimit_WhitespaceSql_Handled()
+  Local oHelper := SqlDialectHelper():New()
+  Local cResult := oHelper:ApplyRowLimit("  SELECT * FROM SA1  ", 10, "default")
+  AssertContains("SQL com espacos usa TOP", cResult, "TOP 10")
+Return Nil

@@ -1,0 +1,324 @@
+/*----------------------------------------------------------------------------*
+  ValidationHelper.spec.tlpp
+  Testes unitarios para ValidationHelper
+
+  Funcoes testadas:
+  - ValidateSqlInput(cSql) -> Logical
+  - DetectQueryType(cSql)  -> Character ("DDL", "DML", "SELECT")
+
+  Cenarios:
+  - SQL valido (SELECT simples)
+  - Multiplas statements (ponto e virgula)
+  - Comandos perigosos (EXEC, EXECUTE, XP_, SP_EXECUTESQL, DBMS_SQL)
+  - Acesso a tabelas de sistema (SYS., INFORMATION_SCHEMA., etc.)
+  - Tipos de query: DDL, DML, SELECT
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+Static nPassed := 0
+Static nFailed := 0
+Static aErrors := {}
+
+/*----------------------------------------------------------------------------*
+  Runner principal
+*----------------------------------------------------------------------------*/
+Function RunValidationHelperTests()
+
+  nPassed := 0
+  nFailed := 0
+  aErrors := {}
+
+  ConOut("=== ValidationHelper Tests ===")
+
+  // ValidateSqlInput - Validos
+  TestValidate_SelectSimple_Valid()
+  TestValidate_SelectWithWhere_Valid()
+  TestValidate_InsertSimple_Valid()
+  TestValidate_UpdateSimple_Valid()
+  TestValidate_DeleteSimple_Valid()
+  TestValidate_SemicolonAtEnd_Valid()
+  TestValidate_WithCTE_Valid()
+
+  // ValidateSqlInput - Invalidos
+  TestValidate_MultipleStatements_Invalid()
+  TestValidate_ExecCommand_Invalid()
+  TestValidate_ExecuteCommand_Invalid()
+  TestValidate_XpPrefix_Invalid()
+  TestValidate_SpExecuteSql_Invalid()
+  TestValidate_DbmsSql_Invalid()
+  TestValidate_ExecuteImmediate_Invalid()
+  TestValidate_SysTable_Invalid()
+  TestValidate_InformationSchema_Invalid()
+  TestValidate_PgCatalog_Invalid()
+  TestValidate_PgToast_Invalid()
+  TestValidate_DbaPrefix_Invalid()
+  TestValidate_AllTables_Invalid()
+  TestValidate_DollarSign_Invalid()
+
+  // ValidateSqlInput - Edge cases
+  TestValidate_EmptyString_Valid()
+  TestValidate_WhitespaceOnly_Valid()
+  TestValidate_CaseInsensitiveDangerous_Invalid()
+
+  // DetectQueryType - DDL
+  TestDetect_CreateTable_DDL()
+  TestDetect_AlterTable_DDL()
+  TestDetect_DropTable_DDL()
+  TestDetect_TruncateTable_DDL()
+  TestDetect_RenameTable_DDL()
+
+  // DetectQueryType - DML
+  TestDetect_InsertInto_DML()
+  TestDetect_UpdateSet_DML()
+  TestDetect_DeleteFrom_DML()
+  TestDetect_MergeInto_DML()
+
+  // DetectQueryType - SELECT
+  TestDetect_SelectFrom_SELECT()
+  TestDetect_WithCTE_SELECT()
+  TestDetect_SelectLowercase_SELECT()
+  TestDetect_WhitespaceBeforeSelect_SELECT()
+
+  // Resumo
+  ConOut("")
+  ConOut("=== Resultado: " + cValToChar(nPassed) + " passaram, " + ;
+         cValToChar(nFailed) + " falharam ===")
+
+  If Len(aErrors) > 0
+    ConOut("--- Falhas ---")
+    AEval(aErrors, {|e| ConOut("  FAIL: " + e)})
+  EndIf
+
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Helpers de assert
+*----------------------------------------------------------------------------*/
+Static Function AssertEquals(cTest, xExpected, xActual)
+  If xExpected == xActual
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (esperado: " + cValToChar(xExpected) + ;
+         ", obtido: " + CValToChar(xActual) + ")")
+  EndIf
+Return Nil
+
+Static Function AssertTrue(cTest, lValue)
+  AssertEquals(cTest, .T., lValue)
+Return Nil
+
+Static Function AssertFalse(cTest, lValue)
+  AssertEquals(cTest, .F., lValue)
+Return Nil
+
+/*============================================================================*
+  TESTES: ValidateSqlInput - Validos
+*============================================================================*/
+
+Static Function TestValidate_SelectSimple_Valid()
+  AssertTrue("SELECT simples e valido", ;
+    ValidateSqlInput("SELECT * FROM SA1"))
+Return Nil
+
+Static Function TestValidate_SelectWithWhere_Valid()
+  AssertTrue("SELECT com WHERE e valido", ;
+    ValidateSqlInput("SELECT A1_COD FROM SA1 WHERE A1_COD = '001'"))
+Return Nil
+
+Static Function TestValidate_InsertSimple_Valid()
+  AssertTrue("INSERT simples e valido", ;
+    ValidateSqlInput("INSERT INTO SA1 (A1_COD) VALUES ('001')"))
+Return Nil
+
+Static Function TestValidate_UpdateSimple_Valid()
+  AssertTrue("UPDATE simples e valido", ;
+    ValidateSqlInput("UPDATE SA1 SET A1_NOME = 'TESTE'"))
+Return Nil
+
+Static Function TestValidate_DeleteSimple_Valid()
+  AssertTrue("DELETE simples e valido", ;
+    ValidateSqlInput("DELETE FROM SA1 WHERE A1_COD = '001'"))
+Return Nil
+
+Static Function TestValidate_SemicolonAtEnd_Valid()
+  AssertTrue("Ponto e virgula no final e valido", ;
+    ValidateSqlInput("SELECT * FROM SA1;"))
+Return Nil
+
+Static Function TestValidate_WithCTE_Valid()
+  AssertTrue("CTE com WITH e valido", ;
+    ValidateSqlInput("WITH cte AS (SELECT 1) SELECT * FROM cte"))
+Return Nil
+
+/*============================================================================*
+  TESTES: ValidateSqlInput - Invalidos
+*============================================================================*/
+
+Static Function TestValidate_MultipleStatements_Invalid()
+  AssertFalse("Multiplas statements sao invalidas", ;
+    ValidateSqlInput("SELECT * FROM SA1; DROP TABLE SA2"))
+Return Nil
+
+Static Function TestValidate_ExecCommand_Invalid()
+  AssertFalse("EXEC e invalido", ;
+    ValidateSqlInput("EXEC sp_helpdb"))
+Return Nil
+
+Static Function TestValidate_ExecuteCommand_Invalid()
+  AssertFalse("EXECUTE e invalido", ;
+    ValidateSqlInput("EXECUTE my_procedure"))
+Return Nil
+
+Static Function TestValidate_XpPrefix_Invalid()
+  AssertFalse("XP_ e invalido", ;
+    ValidateSqlInput("XP_CMDSHELL 'dir'"))
+Return Nil
+
+Static Function TestValidate_SpExecuteSql_Invalid()
+  AssertFalse("SP_EXECUTESQL e invalido", ;
+    ValidateSqlInput("EXEC SP_EXECUTESQL N'SELECT 1'"))
+Return Nil
+
+Static Function TestValidate_DbmsSql_Invalid()
+  AssertFalse("DBMS_SQL e invalido", ;
+    ValidateSqlInput("BEGIN DBMS_SQL.EXECUTE(1); END;"))
+Return Nil
+
+Static Function TestValidate_ExecuteImmediate_Invalid()
+  AssertFalse("EXECUTE IMMEDIATE e invalido", ;
+    ValidateSqlInput("EXECUTE IMMEDIATE 'DROP TABLE X'"))
+Return Nil
+
+Static Function TestValidate_SysTable_Invalid()
+  AssertFalse("SYS. e invalido", ;
+    ValidateSqlInput("SELECT * FROM SYS.TABLES"))
+Return Nil
+
+Static Function TestValidate_InformationSchema_Invalid()
+  AssertFalse("INFORMATION_SCHEMA. e invalido", ;
+    ValidateSqlInput("SELECT * FROM INFORMATION_SCHEMA.TABLES"))
+Return Nil
+
+Static Function TestValidate_PgCatalog_Invalid()
+  AssertFalse("PG_CATALOG. e invalido", ;
+    ValidateSqlInput("SELECT * FROM PG_CATALOG.PG_TABLES"))
+Return Nil
+
+Static Function TestValidate_PgToast_Invalid()
+  AssertFalse("PG_TOAST e invalido", ;
+    ValidateSqlInput("SELECT * FROM PG_TOAST_12345"))
+Return Nil
+
+Static Function TestValidate_DbaPrefix_Invalid()
+  AssertFalse("DBA_ e invalido", ;
+    ValidateSqlInput("SELECT * FROM DBA_TABLES"))
+Return Nil
+
+Static Function TestValidate_AllTables_Invalid()
+  AssertFalse("ALL_TABLES e invalido", ;
+    ValidateSqlInput("SELECT * FROM ALL_TABLES"))
+Return Nil
+
+Static Function TestValidate_DollarSign_Invalid()
+  AssertFalse("V$ e invalido", ;
+    ValidateSqlInput("SELECT * FROM V$SESSION"))
+Return Nil
+
+/*============================================================================*
+  TESTES: ValidateSqlInput - Edge Cases
+*============================================================================*/
+
+Static Function TestValidate_EmptyString_Valid()
+  AssertTrue("String vazia e valido", ValidateSqlInput(""))
+Return Nil
+
+Static Function TestValidate_WhitespaceOnly_Valid()
+  AssertTrue("Somente espacos e valido", ValidateSqlInput("   "))
+Return Nil
+
+Static Function TestValidate_CaseInsensitiveDangerous_Invalid()
+  AssertFalse("exec lowercase e invalido", ;
+    ValidateSqlInput("exec sp_help"))
+  AssertFalse("Execute mixed case e invalido", ;
+    ValidateSqlInput("Execute my_proc"))
+Return Nil
+
+/*============================================================================*
+  TESTES: DetectQueryType - DDL
+*============================================================================*/
+
+Static Function TestDetect_CreateTable_DDL()
+  AssertEquals("CREATE TABLE e DDL", "DDL", ;
+    DetectQueryType("CREATE TABLE T1 (ID INT)"))
+Return Nil
+
+Static Function TestDetect_AlterTable_DDL()
+  AssertEquals("ALTER TABLE e DDL", "DDL", ;
+    DetectQueryType("ALTER TABLE T1 ADD COL VARCHAR(10)"))
+Return Nil
+
+Static Function TestDetect_DropTable_DDL()
+  AssertEquals("DROP TABLE e DDL", "DDL", ;
+    DetectQueryType("DROP TABLE T1"))
+Return Nil
+
+Static Function TestDetect_TruncateTable_DDL()
+  AssertEquals("TRUNCATE TABLE e DDL", "DDL", ;
+    DetectQueryType("TRUNCATE TABLE T1"))
+Return Nil
+
+Static Function TestDetect_RenameTable_DDL()
+  AssertEquals("RENAME e DDL", "DDL", ;
+    DetectQueryType("RENAME TABLE T1 TO T2"))
+Return Nil
+
+/*============================================================================*
+  TESTES: DetectQueryType - DML
+*============================================================================*/
+
+Static Function TestDetect_InsertInto_DML()
+  AssertEquals("INSERT INTO e DML", "DML", ;
+    DetectQueryType("INSERT INTO T1 VALUES (1)"))
+Return Nil
+
+Static Function TestDetect_UpdateSet_DML()
+  AssertEquals("UPDATE e DML", "DML", ;
+    DetectQueryType("UPDATE T1 SET X = 1"))
+Return Nil
+
+Static Function TestDetect_DeleteFrom_DML()
+  AssertEquals("DELETE e DML", "DML", ;
+    DetectQueryType("DELETE FROM T1 WHERE ID = 1"))
+Return Nil
+
+Static Function TestDetect_MergeInto_DML()
+  AssertEquals("MERGE e DML", "DML", ;
+    DetectQueryType("MERGE INTO T1 USING T2 ON T1.ID = T2.ID"))
+Return Nil
+
+/*============================================================================*
+  TESTES: DetectQueryType - SELECT
+*============================================================================*/
+
+Static Function TestDetect_SelectFrom_SELECT()
+  AssertEquals("SELECT e SELECT", "SELECT", ;
+    DetectQueryType("SELECT * FROM SA1"))
+Return Nil
+
+Static Function TestDetect_WithCTE_SELECT()
+  AssertEquals("WITH CTE e SELECT", "SELECT", ;
+    DetectQueryType("WITH cte AS (SELECT 1) SELECT * FROM cte"))
+Return Nil
+
+Static Function TestDetect_SelectLowercase_SELECT()
+  AssertEquals("select lowercase e SELECT", "SELECT", ;
+    DetectQueryType("select * from sa1"))
+Return Nil
+
+Static Function TestDetect_WhitespaceBeforeSelect_SELECT()
+  AssertEquals("SELECT com espacos e SELECT", "SELECT", ;
+    DetectQueryType("  SELECT * FROM SA1"))
+Return Nil

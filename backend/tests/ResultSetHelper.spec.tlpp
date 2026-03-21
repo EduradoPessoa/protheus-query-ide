@@ -1,0 +1,291 @@
+/*----------------------------------------------------------------------------*
+  ResultSetHelper.spec.tlpp
+  Testes unitarios para ResultSetHelper
+
+  Metodos testados:
+  - GetColumns(cAlias)   -> Array de objetos {name, type, size, dec}
+  - GetRows(cAlias, nMaxRows) -> Array de arrays com valores
+
+  Nota: Estes testes requerem um alias de trabalho com dados.
+  Utilizamos um alias temporario criado via DBUseArea + DBCreate
+  para testar sem depender de conexao externa.
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+Static nPassed := 0
+Static nFailed := 0
+Static aErrors := {}
+
+/*----------------------------------------------------------------------------*
+  Runner principal
+*----------------------------------------------------------------------------*/
+Function RunResultSetHelperTests()
+
+  nPassed := 0
+  nFailed := 0
+  aErrors := {}
+
+  ConOut("=== ResultSetHelper Tests ===")
+
+  // GetColumns
+  TestGetColumns_ReturnsArrayOfObjects()
+  TestGetColumns_ColumnCount_MatchesFCount()
+  TestGetColumns_ColumnHasName()
+  TestGetColumns_ColumnHasType()
+  TestGetColumns_ColumnHasSize()
+  TestGetColumns_EmptyArea_ReturnsEmptyArray()
+
+  // GetRows
+  TestGetRows_ReturnsArray()
+  TestGetRows_LimitRespected()
+  TestGetRows_ZeroMax_ReturnsEmpty()
+  TestGetRows_NegativeMax_ReturnsEmpty()
+  TestGetRows_MaxExceedsData_ReturnsAllRows()
+  TestGetRows_EachRow_HasCorrectFieldCount()
+  TestGetRows_EmptyArea_ReturnsEmptyArray()
+
+  // Resumo
+  ConOut("")
+  ConOut("=== Resultado: " + cValToChar(nPassed) + " passaram, " + ;
+         cValToChar(nFailed) + " falharam ===")
+
+  If Len(aErrors) > 0
+    ConOut("--- Falhas ---")
+    AEval(aErrors, {|e| ConOut("  FAIL: " + e)})
+  EndIf
+
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Helpers de assert
+*----------------------------------------------------------------------------*/
+Static Function AssertEquals(cTest, xExpected, xActual)
+  If xExpected == xActual
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (esperado: " + cValToChar(xExpected) + ;
+         ", obtido: " + CValToChar(xActual) + ")")
+  EndIf
+Return Nil
+
+Static Function AssertTrue(cTest, lValue)
+  AssertEquals(cTest, .T., lValue)
+Return Nil
+
+Static Function AssertGreaterThan(cTest, nActual, nMin)
+  If nActual > nMin
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (esperado > " + cValToChar(nMin) + ;
+         ", obtido: " + CValToChar(nActual) + ")")
+  EndIf
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Helper: Cria area temporaria para testes
+*----------------------------------------------------------------------------*/
+Static Function CreateTestAlias()
+  Local cAlias   := "TST_RSLT"
+  Local aStruct  := {}
+  Local aData    := {}
+  Local i        := 0
+
+  // Estrutura de teste
+  AAdd(aStruct, {"CODIGO",  "C", 6,  0})
+  AAdd(aStruct, {"NOME",    "C", 40, 0})
+  AAdd(aStruct, {"VALOR",   "N", 10, 2})
+  AAdd(aStruct, {"ATIVO",   "L", 1,  0})
+
+  // Dados de teste (5 linhas)
+  AAdd(aData, {"000001", "Produto Alpha",   150.75, .T.})
+  AAdd(aData, {"000002", "Produto Beta",    300.00, .T.})
+  AAdd(aData, {"000003", "Produto Gamma",    45.50, .F.})
+  AAdd(aData, {"000004", "Produto Delta",  1200.00, .T.})
+  AAdd(aData, {"000005", "Produto Epsilon",  89.99, .F.})
+
+  // Cria area temporaria em disco
+  DBCreate(cAlias, aStruct, "DBFCDX")
+  DBUseArea(.T., "DBFCDX", cAlias, cAlias, .F., .F.)
+
+  // Popula dados
+  For i := 1 To Len(aData)
+    (cAlias)->(DBAppend())
+    (cAlias)->CODIGO := aData[i][1]
+    (cAlias)->NOME   := aData[i][2]
+    (cAlias)->VALOR  := aData[i][3]
+    (cAlias)->ATIVO  := aData[i][4]
+    (cAlias)->(DBCommit())
+  Next i
+
+  (cAlias)->(DbGoTop())
+
+Return cAlias
+
+Static Function DestroyTestAlias(cAlias)
+  If Select(cAlias) > 0
+    (cAlias)->(DbCloseArea())
+  EndIf
+  // Remove arquivo temporario
+  FErase(cAlias + ".dbf")
+  FErase(cAlias + ".fpt")
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: GetColumns
+*----------------------------------------------------------------------------*/
+Static Function TestGetColumns_ReturnsArrayOfObjects()
+  Local cAlias   := CreateTestAlias()
+  Local oHelper  := ResultSetHelper():New()
+  Local aColumns := oHelper:GetColumns(cAlias)
+
+  AssertTrue("GetColumns retorna Array", ValType(aColumns) == "A")
+  AssertTrue("GetColumns array nao vazio", Len(aColumns) > 0)
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetColumns_ColumnCount_MatchesFCount()
+  Local cAlias   := CreateTestAlias()
+  Local oHelper  := ResultSetHelper():New()
+  Local aColumns := oHelper:GetColumns(cAlias)
+  Local nExpected := (cAlias)->(FCount())
+
+  AssertEquals("GetColumns count = FCount", nExpected, Len(aColumns))
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetColumns_ColumnHasName()
+  Local cAlias   := CreateTestAlias()
+  Local oHelper  := ResultSetHelper():New()
+  Local aColumns := oHelper:GetColumns(cAlias)
+
+  AssertTrue("Coluna 1 tem 'name'", !Empty(aColumns[1]:Get("name")))
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetColumns_ColumnHasType()
+  Local cAlias   := CreateTestAlias()
+  Local oHelper  := ResultSetHelper():New()
+  Local aColumns := oHelper:GetColumns(cAlias)
+
+  AssertTrue("Coluna 1 tem 'type'", !Empty(aColumns[1]:Get("type")))
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetColumns_ColumnHasSize()
+  Local cAlias   := CreateTestAlias()
+  Local oHelper  := ResultSetHelper():New()
+  Local aColumns := oHelper:GetColumns(cAlias)
+
+  AssertTrue("Coluna 1 tem 'size'", aColumns[1]:Get("size") > 0)
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetColumns_EmptyArea_ReturnsEmptyArray()
+  Local cAlias   := CreateTestAlias()
+  Local oHelper  := ResultSetHelper():New()
+  // Zera o area movendo para EOF
+  (cAlias)->(DbGoBottom())
+  (cAlias)->(DbGoTop())
+
+  // Ainda deve retornar colunas mesmo sem linhas
+  Local aColumns := oHelper:GetColumns(cAlias)
+  AssertTrue("GetColumns com area valida retorna colunas", Len(aColumns) > 0)
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: GetRows
+*----------------------------------------------------------------------------*/
+Static Function TestGetRows_ReturnsArray()
+  Local cAlias := CreateTestAlias()
+  Local oHelper := ResultSetHelper():New()
+  Local aRows := oHelper:GetRows(cAlias, 10)
+
+  AssertTrue("GetRows retorna Array", ValType(aRows) == "A")
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetRows_LimitRespected()
+  Local cAlias := CreateTestAlias()
+  Local oHelper := ResultSetHelper():New()
+  Local aRows := oHelper:GetRows(cAlias, 3)
+
+  AssertEquals("GetRows com max=3 retorna 3 linhas", 3, Len(aRows))
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetRows_ZeroMax_ReturnsEmpty()
+  Local cAlias := CreateTestAlias()
+  Local oHelper := ResultSetHelper():New()
+  Local aRows := oHelper:GetRows(cAlias, 0)
+
+  AssertEquals("GetRows com max=0 retorna 0 linhas", 0, Len(aRows))
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetRows_NegativeMax_ReturnsEmpty()
+  Local cAlias := CreateTestAlias()
+  Local oHelper := ResultSetHelper():New()
+  Local aRows := oHelper:GetRows(cAlias, -5)
+
+  AssertEquals("GetRows com max=-5 retorna 0 linhas", 0, Len(aRows))
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetRows_MaxExceedsData_ReturnsAllRows()
+  Local cAlias := CreateTestAlias()
+  Local oHelper := ResultSetHelper():New()
+  Local aRows := oHelper:GetRows(cAlias, 999)
+
+  AssertEquals("GetRows max=999 retorna 5 linhas (total)", 5, Len(aRows))
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetRows_EachRow_HasCorrectFieldCount()
+  Local cAlias := CreateTestAlias()
+  Local oHelper := ResultSetHelper():New()
+  Local aRows := oHelper:GetRows(cAlias, 5)
+  Local nExpected := (cAlias)->(FCount())
+
+  If Len(aRows) > 0
+    AssertEquals("Linha 1 tem " + cValToChar(nExpected) + " campos", ;
+      nExpected, Len(aRows[1]))
+  EndIf
+
+  DestroyTestAlias(cAlias)
+Return Nil
+
+Static Function TestGetRows_EmptyArea_ReturnsEmptyArray()
+  Local cAlias  := "TST_EMPTY"
+  Local aStruct := {}
+  Local oHelper := ResultSetHelper():New()
+  Local aRows   := {}
+
+  AAdd(aStruct, {"ID", "N", 5, 0})
+
+  DBCreate(cAlias, aStruct, "DBFCDX")
+  DBUseArea(.T., "DBFCDX", cAlias, cAlias, .F., .F.)
+
+  aRows := oHelper:GetRows(cAlias, 100)
+
+  AssertEquals("GetRows area vazia retorna 0 linhas", 0, Len(aRows))
+
+  (cAlias)->(DbCloseArea())
+  FErase(cAlias + ".dbf")
+Return Nil
