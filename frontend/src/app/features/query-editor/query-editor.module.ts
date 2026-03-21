@@ -7,11 +7,13 @@ import { MonacoEditorModule } from 'ngx-monaco-editor';
 
 import { QueryEditorComponent } from './query-editor.component';
 import { ToolbarComponent } from './toolbar.component';
+import { TabsComponent } from './tabs.component';
 
 @NgModule({
   declarations: [
     QueryEditorComponent,
-    ToolbarComponent
+    ToolbarComponent,
+    TabsComponent
   ],
   imports: [
     CommonModule,
@@ -21,7 +23,8 @@ import { ToolbarComponent } from './toolbar.component';
   ],
   exports: [
     QueryEditorComponent,
-    ToolbarComponent
+    ToolbarComponent,
+    TabsComponent
   ]
 })
 export class QueryEditorModule { }
