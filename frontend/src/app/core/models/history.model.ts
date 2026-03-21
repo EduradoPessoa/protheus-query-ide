@@ -12,3 +12,10 @@ export interface HistoryRecord {
   status: 'S' | 'E';
   erro?: string;
 }
+
+export interface PagedResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}

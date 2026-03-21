@@ -41,6 +41,20 @@ export class ApiService {
     );
   }
 
+  put<T>(endpoint: string, body: unknown): Observable<T> {
+    const url = `${this.baseUrl}${endpoint}`;
+    return this.http.put<T>(url, body).pipe(
+      catchError(this.handleError)
+    );
+  }
+
+  patch<T>(endpoint: string, body: unknown): Observable<T> {
+    const url = `${this.baseUrl}${endpoint}`;
+    return this.http.patch<T>(url, body).pipe(
+      catchError(this.handleError)
+    );
+  }
+
   delete<T>(endpoint: string): Observable<T> {
     const url = `${this.baseUrl}${endpoint}`;
     return this.http.delete<T>(url).pipe(

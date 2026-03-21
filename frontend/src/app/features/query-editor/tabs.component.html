@@ -1,0 +1,107 @@
+<div class="pq-tabs-container">
+  <div class="pq-tabs-header">
+    <div class="pq-tab-list">
+      @for (tab of tabs; track tab.id) {
+        <div
+          class="pq-tab-item"
+          [class.pq-tab-active]="tab.id === activeTabId"
+          [class.pq-tab-executing]="tab.isExecuting"
+          (click)="activateTab(tab.id)">
+          <span class="pq-tab-name">{{ tab.name }}</span>
+          @if (tab.isExecuting) {
+            <span class="pq-tab-badge pq-tab-badge-executing" title="Executando..."></span>
+          }
+          @if (tab.result && !tab.isExecuting && tab.result.success) {
+            <span class="pq-tab-badge pq-tab-badge-result" title="Com resultado"></span>
+          }
+          @if (tab.error || (tab.result && !tab.result.success)) {
+            <span class="pq-tab-badge pq-tab-badge-error" title="Erro"></span>
+          }
+          <button
+            class="pq-tab-close"
+            [class.pq-tab-close-hidden]="tabs.length <= 1"
+            (click)="closeTab(tab.id, $event)"
+            title="Fechar aba (Ctrl+W)">
+            &times;
+          </button>
+        </div>
+      }
+    </div>
+    <button
+      class="pq-tab-add"
+      (click)="addTab()"
+      title="Nova aba (Ctrl+T)">
+      +
+    </button>
+  </div>
+
+  @if (activeTab) {
+    <div class="pq-tab-content">
+      <div class="pq-tab-editor">
+        <div class="pq-editor-label">SQL Editor</div>
+        <ngx-monaco-editor
+          [options]="activeEditorOptions"
+          [(ngModel)]="activeTab.sql"
+          (ngModelChange)="onSqlChange($event, activeTab!)"
+          (onInit)="onEditorInit($event, activeTab!)">
+        </ngx-monaco-editor>
+      </div>
+
+      @if (activeTab.error) {
+        <div class="pq-alert pq-alert-danger">
+          <po-icon p-icon="po-icon-warning"></po-icon>
+          <span>{{ activeTab.error }}</span>
+        </div>
+      }
+
+      @if (activeTab.result && !activeTab.result.success && activeTab.result.error && !activeTab.error) {
+        <div class="pq-alert pq-alert-danger">
+          <po-icon p-icon="po-icon-warning"></po-icon>
+          <span>{{ activeTab.result.error }}</span>
+        </div>
+      }
+
+      @if (activeTab.result && activeTab.result.success && activeTab.result.queryType !== 'SELECT') {
+        <div class="pq-alert pq-alert-success">
+          <po-icon p-icon="po-icon-ok"></po-icon>
+          <span>{{ activeTab.result.rowsAffected ?? 0 }} linhas afetadas em {{ activeTab.result.executionTimeMs }}ms</span>
+        </div>
+      }
+
+      @if (hasResults) {
+        <div class="pq-tab-results">
+          <div class="pq-results-header">
+            <span class="pq-results-label">Resultados</span>
+            <span class="pq-results-meta">
+              {{ activeTab!.result!.rowCount ?? resultRows.length }} linhas
+              &middot;
+              {{ activeTab!.result!.executionTimeMs }}ms
+            </span>
+          </div>
+          <div class="pq-results-table-wrapper">
+            <table class="pq-results-table">
+              <thead>
+                <tr>
+                  <th class="pq-results-row-num">#</th>
+                  @for (col of resultColumns; track col) {
+                    <th>{{ col }}</th>
+                  }
+                </tr>
+              </thead>
+              <tbody>
+                @for (row of resultRows; track $index) {
+                  <tr>
+                    <td class="pq-results-row-num">{{ $index + 1 }}</td>
+                    @for (cell of row; track $index) {
+                      <td>{{ cell ?? 'NULL' }}</td>
+                    }
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+    </div>
+  }
+</div>
