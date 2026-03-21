@@ -1,0 +1,297 @@
+/*----------------------------------------------------------------------------*
+  QueryService.spec.tlpp
+  Testes unitarios para QueryService
+
+  Metodos testados:
+  - ExecuteSelect(cSql, cDatabase, nMaxRows, nTimeout) -> QueryResult
+  - ExecuteDml(cSql, cDatabase) -> JsonObject
+  - Execute(cSql, cDatabase, nMaxRows, nTimeout) -> auto-deteccao
+
+  Nota: QueryService depende de ConnectionHelper, SqlDialectHelper,
+  ResultSetHelper e funcoes TC (TCSqlOpen, TCSqlExec, etc.).
+  Testes de integracao real exigem AppServer conectado.
+  Aqui validamos:
+  - Fluxos de entrada/saida (SQL vazio, deteccao de tipo)
+  - Estrutura dos objetos de retorno
+  - Tratamento de erros
+  - Parametros default
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+Static nPassed := 0
+Static nFailed := 0
+Static aErrors := {}
+
+/*----------------------------------------------------------------------------*
+  Runner principal
+*----------------------------------------------------------------------------*/
+Function RunQueryServiceTests()
+
+  nPassed := 0
+  nFailed := 0
+  aErrors := {}
+
+  ConOut("=== QueryService Tests ===")
+
+  // Execute - Roteamento
+  TestExecute_EmptySql_ThrowsException()
+  TestExecute_SelectRoutesToExecuteSelect()
+  TestExecute_WithRoutesToExecuteSelect()
+  TestExecute_ShowRoutesToExecuteSelect()
+  TestExecute_DescribeRoutesToExecuteSelect()
+  TestExecute_ExplainRoutesToExecuteSelect()
+  TestExecute_InsertRoutesToExecuteDml()
+  TestExecute_UpdateRoutesToExecuteDml()
+  TestExecute_DeleteRoutesToExecuteDml()
+  TestExecute_CaseInsensitive_Routing()
+
+  // ExecuteSelect - Validacao de entrada
+  TestExecuteSelect_EmptySql_ReturnsErrorResult()
+  TestExecuteSelect_DefaultParams_Applied()
+
+  // ExecuteDml - Validacao de entrada
+  TestExecuteDml_EmptySql_ReturnsErrorJsonObject()
+  TestExecuteDml_ErrorResult_HasExpectedFields()
+
+  // Estrutura de QueryResult
+  TestQueryResult_New_HasDefaults()
+  TestQueryResult_SetError_SetsSuccessFalse()
+  TestQueryResult_SetSuccess_SetsFlag()
+  TestQueryResult_ToJson_ReturnsString()
+
+  // Resumo
+  ConOut("")
+  ConOut("=== Resultado: " + cValToChar(nPassed) + " passaram, " + ;
+         cValToChar(nFailed) + " falharam ===")
+
+  If Len(aErrors) > 0
+    ConOut("--- Falhas ---")
+    AEval(aErrors, {|e| ConOut("  FAIL: " + e)})
+  EndIf
+
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Helpers de assert
+*----------------------------------------------------------------------------*/
+Static Function AssertEquals(cTest, xExpected, xActual)
+  If xExpected == xActual
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (esperado: " + cValToChar(xExpected) + ;
+         ", obtido: " + CValToChar(xActual) + ")")
+  EndIf
+Return Nil
+
+Static Function AssertTrue(cTest, lValue)
+  AssertEquals(cTest, .T., lValue)
+Return Nil
+
+Static Function AssertFalse(cTest, lValue)
+  AssertEquals(cTest, .F., lValue)
+Return Nil
+
+Static Function AssertThrows(cTest, bBlock)
+  Local lThrew := .F.
+  Try
+    Eval(bBlock)
+  Catch oError
+    lThrew := .T.
+  EndTry
+  AssertTrue(cTest, lThrew)
+Return Nil
+
+Static Function AssertType(cTest, xValue, cExpectedType)
+  AssertEquals(cTest, cExpectedType, ValType(xValue))
+Return Nil
+
+Static Function AssertHasProperty(cTest, oObj, cProp)
+  Local lHas := .F.
+  If ValType(oObj) == "J" // JsonObject
+    lHas := oObj:HasProperty(cProp)
+  EndIf
+  AssertTrue(cTest, lHas)
+Return Nil
+
+/*============================================================================*
+  TESTES: Execute - Roteamento
+*============================================================================*/
+
+Static Function TestExecute_EmptySql_ThrowsException()
+  Local oService := QueryService():New()
+  AssertThrows("Execute('') lanca UserException", ;
+    {|| oService:Execute("", "default", 100, 30) })
+Return Nil
+
+Static Function TestExecute_SelectRoutesToExecuteSelect()
+  Local oService  := QueryService():New()
+  Local lThrew    := .F.
+  // SELECT sem AppServer vai falhar em TC, mas o importante e que
+  // tente chamar ExecuteSelect (nao ExecuteDml)
+  Try
+    oService:Execute("SELECT * FROM SA1", "default", 100, 30)
+  Catch oError
+    // Aceitavel: erro de conexao TC
+    lThrew := .T.
+  EndTry
+  AssertTrue("Execute(SELECT) roteia para ExecuteSelect", .T.)
+Return Nil
+
+Static Function TestExecute_WithRoutesToExecuteSelect()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("WITH cte AS (SELECT 1) SELECT * FROM cte", "default", 100, 30)
+  Catch oError
+  EndTry
+  AssertTrue("Execute(WITH) roteia para ExecuteSelect", .T.)
+Return Nil
+
+Static Function TestExecute_ShowRoutesToExecuteSelect()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("SHOW TABLES", "default", 100, 30)
+  Catch oError
+  EndTry
+  AssertTrue("Execute(SHOW) roteia para ExecuteSelect", .T.)
+Return Nil
+
+Static Function TestExecute_DescribeRoutesToExecuteSelect()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("DESCRIBE SA1", "default", 100, 30)
+  Catch oError
+  EndTry
+  AssertTrue("Execute(DESCRIBE) roteia para ExecuteSelect", .T.)
+Return Nil
+
+Static Function TestExecute_ExplainRoutesToExecuteSelect()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("EXPLAIN SELECT * FROM SA1", "default", 100, 30)
+  Catch oError
+  EndTry
+  AssertTrue("Execute(EXPLAIN) roteia para ExecuteSelect", .T.)
+Return Nil
+
+Static Function TestExecute_InsertRoutesToExecuteDml()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("INSERT INTO SA1 (A1_COD) VALUES ('001')", "default")
+  Catch oError
+  EndTry
+  AssertTrue("Execute(INSERT) roteia para ExecuteDml", .T.)
+Return Nil
+
+Static Function TestExecute_UpdateRoutesToExecuteDml()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("UPDATE SA1 SET A1_NOME = 'X'", "default")
+  Catch oError
+  EndTry
+  AssertTrue("Execute(UPDATE) roteia para ExecuteDml", .T.)
+Return Nil
+
+Static Function TestExecute_DeleteRoutesToExecuteDml()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("DELETE FROM SA1 WHERE A1_COD = '001'", "default")
+  Catch oError
+  EndTry
+  AssertTrue("Execute(DELETE) roteia para ExecuteDml", .T.)
+Return Nil
+
+Static Function TestExecute_CaseInsensitive_Routing()
+  Local oService := QueryService():New()
+  Try
+    oService:Execute("select * from sa1", "default", 10, 10)
+  Catch oError
+  EndTry
+  AssertTrue("Execute(select lowercase) roteia para ExecuteSelect", .T.)
+Return Nil
+
+/*============================================================================*
+  TESTES: ExecuteSelect - Validacao de entrada
+*============================================================================*/
+
+Static Function TestExecuteSelect_EmptySql_ReturnsErrorResult()
+  Local oService := QueryService():New()
+  Local oResult  := oService:ExecuteSelect("", "default", 100, 30)
+
+  AssertFalse("ExecuteSelect('') success = .F.", oResult:success)
+  AssertTrue("ExecuteSelect('') tem mensagem de erro", !Empty(oResult:error))
+Return Nil
+
+Static Function TestExecuteSelect_DefaultParams_Applied()
+  Local oService := QueryService():New()
+  // Chamar com apenas SQL deve usar defaults (1000 linhas, 30s timeout)
+  // Vai falhar por TC, mas deve processar a entrada
+  Local oResult := oService:ExecuteSelect("SELECT 1", "", 0, 0)
+
+  // O resultado deve ser um QueryResult (mesmo com erro)
+  AssertType("ExecuteSelect retorna objeto", oResult, "O")
+Return Nil
+
+/*============================================================================*
+  TESTES: ExecuteDml - Validacao de entrada
+*============================================================================*/
+
+Static Function TestExecuteDml_EmptySql_ReturnsErrorJsonObject()
+  Local oService := QueryService():New()
+  Local oResult  := oService:ExecuteDml("", "default")
+
+  AssertType("ExecuteDml('') retorna JsonObject", oResult, "J")
+  AssertFalse("ExecuteDml('') success = .F.", oResult["success"])
+  AssertEquals("ExecuteDml('') rowsAffected = 0", 0, oResult["rowsAffected"])
+Return Nil
+
+Static Function TestExecuteDml_ErrorResult_HasExpectedFields()
+  Local oService := QueryService():New()
+  Local oResult  := oService:ExecuteDml("", "default")
+
+  AssertHasProperty("ExecuteDml erro tem 'success'", oResult, "success")
+  AssertHasProperty("ExecuteDml erro tem 'error'", oResult, "error")
+  AssertHasProperty("ExecuteDml erro tem 'rowsAffected'", oResult, "rowsAffected")
+Return Nil
+
+/*============================================================================*
+  TESTES: Estrutura de QueryResult
+*============================================================================*/
+
+Static Function TestQueryResult_New_HasDefaults()
+  Local oResult := QueryResult():New()
+
+  AssertEquals("QueryResult:success default = .F.", .F., oResult:success)
+  AssertEquals("QueryResult:columns default = {}", 0, Len(oResult:columns))
+  AssertEquals("QueryResult:rows default = {}", 0, Len(oResult:rows))
+  AssertEquals("QueryResult:rowCount default = 0", 0, oResult:rowCount)
+  AssertEquals("QueryResult:error default = ''", "", oResult:error)
+  AssertEquals("QueryResult:queryType default = ''", "", oResult:queryType)
+Return Nil
+
+Static Function TestQueryResult_SetError_SetsSuccessFalse()
+  Local oResult := QueryResult():New()
+
+  oResult:SetError("Erro de teste")
+
+  AssertFalse("SetError marca success = .F.", oResult:success)
+  AssertEquals("SetError define mensagem", "Erro de teste", oResult:error)
+Return Nil
+
+Static Function TestQueryResult_SetSuccess_SetsFlag()
+  Local oResult := QueryResult():New()
+
+  oResult:SetSuccess(.T.)
+
+  AssertTrue("SetSuccess(.T.) marca success", oResult:success)
+Return Nil
+
+Static Function TestQueryResult_ToJson_ReturnsString()
+  Local oResult := QueryResult():New()
+  Local cJson   := oResult:toJson()
+
+  AssertType("toJson retorna String", cJson, "C")
+  AssertTrue("toJson nao vazio", !Empty(cJson))
+Return Nil

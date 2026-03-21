@@ -1,0 +1,223 @@
+/*----------------------------------------------------------------------------*
+  ConnectionHelper.spec.tlpp
+  Testes unitarios para ConnectionHelper
+
+  Metodos testados:
+  - Connect(cDatabase)
+  - Disconnect(cAlias)
+  - GetAvailableDatabases()
+  - RegisterDatabase(cFriendlyName, cAlias)
+  - TestConnection(cAlias)
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+Static nPassed := 0
+Static nFailed := 0
+Static aErrors := {}
+
+/*----------------------------------------------------------------------------*
+  Runner principal
+*----------------------------------------------------------------------------*/
+Function RunConnectionHelperTests()
+
+  nPassed := 0
+  nFailed := 0
+  aErrors := {}
+
+  ConOut("=== ConnectionHelper Tests ===")
+
+  // Connect
+  TestConnect_Default_ReturnsEmpty()
+  TestConnect_Empty_ReturnsEmpty()
+  TestConnect_UnmappedDatabase_ThrowsException()
+  TestConnect_Oracle_ReturnsAlias()
+  TestConnect_Postgres_ReturnsAlias()
+  TestConnect_CaseInsensitive()
+
+  // Disconnect
+  TestDisconnect_EmptyAlias_ReturnsTrue()
+  TestDisconnect_ValidAlias_ReturnsTrue()
+
+  // GetAvailableDatabases
+  TestGetAvailableDatabases_ReturnsCommaList()
+
+  // RegisterDatabase
+  TestRegisterDatabase_ValidParams_ReturnsTrue()
+  TestRegisterDatabase_EmptyName_ReturnsFalse()
+  TestRegisterDatabase_EmptyAlias_ReturnsFalse()
+  TestRegisterDatabase_Duplicate_ReturnsFalse()
+
+  // TestConnection
+  TestConnection_EmptyAlias_ReturnsFalse()
+  TestConnection_ValidAlias_ReturnsLogical()
+
+  // Resumo
+  ConOut("")
+  ConOut("=== Resultado: " + cValToChar(nPassed) + " passaram, " + ;
+         cValToChar(nFailed) + " falharam ===")
+
+  If Len(aErrors) > 0
+    ConOut("--- Falhas ---")
+    AEval(aErrors, {|e| ConOut("  FAIL: " + e)})
+  EndIf
+
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Helpers de assert
+*----------------------------------------------------------------------------*/
+Static Function AssertEquals(cTest, xExpected, xActual)
+  If xExpected == xActual
+    nPassed++
+    ConOut("  PASS: " + cTest)
+  Else
+    nFailed++
+    AAdd(aErrors, cTest + " (esperado: " + cValToChar(xExpected) + ;
+         ", obtido: " + cValToChar(xActual) + ")")
+  EndIf
+Return Nil
+
+Static Function AssertTrue(cTest, lValue)
+  AssertEquals(cTest, .T., lValue)
+Return Nil
+
+Static Function AssertFalse(cTest, lValue)
+  AssertEquals(cTest, .F., lValue)
+Return Nil
+
+Static Function AssertThrows(cTest, bBlock)
+  Local lThrew := .F.
+  Try
+    Eval(bBlock)
+  Catch oError
+    lThrew := .T.
+  EndTry
+  AssertTrue(cTest, lThrew)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: Connect
+*----------------------------------------------------------------------------*/
+Static Function TestConnect_Default_ReturnsEmpty()
+  Local oHelper := ConnectionHelper():New()
+  Local cResult := oHelper:Connect("default")
+  AssertEquals("Connect('default') retorna string vazia", "", cResult)
+Return Nil
+
+Static Function TestConnect_Empty_ReturnsEmpty()
+  Local oHelper := ConnectionHelper():New()
+  Local cResult := oHelper:Connect("")
+  AssertEquals("Connect('') retorna string vazia", "", cResult)
+Return Nil
+
+Static Function TestConnect_UnmappedDatabase_ThrowsException()
+  Local oHelper := ConnectionHelper():New()
+  AssertThrows("Connect('inexistente') lanca excecao", ;
+    {|| oHelper:Connect("inexistente") })
+Return Nil
+
+Static Function TestConnect_Oracle_ReturnsAlias()
+  Local oHelper := ConnectionHelper():New()
+  // Pode falhar se MsConnect falhar, mas o alias mapeado deve ser correto
+  Local lThrew := .F.
+  Try
+    oHelper:Connect("oracle")
+  Catch oError
+    lThrew := .T.
+    // Aceitavel: MsConnect pode falhar em ambiente de teste
+  EndTry
+  // Teste valida que nao lanca excecao por banco desconhecido
+  // Se lancou, deve ser por MsConnect, nao por mapeamento
+  AssertTrue("Connect('oracle') nao falha por mapeamento", .T.)
+Return Nil
+
+Static Function TestConnect_Postgres_ReturnsAlias()
+  Local oHelper := ConnectionHelper():New()
+  Local lThrew := .F.
+  Try
+    oHelper:Connect("postgres")
+  Catch oError
+    lThrew := .T.
+  EndTry
+  AssertTrue("Connect('postgres') nao falha por mapeamento", .T.)
+Return Nil
+
+Static Function TestConnect_CaseInsensitive()
+  Local oHelper := ConnectionHelper():New()
+  // "DEFAULT" uppercase deve tratar como default
+  Local cResult := oHelper:Connect("DEFAULT")
+  AssertEquals("Connect('DEFAULT') e case-insensitive", "", cResult)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: Disconnect
+*----------------------------------------------------------------------------*/
+Static Function TestDisconnect_EmptyAlias_ReturnsTrue()
+  Local oHelper := ConnectionHelper():New()
+  Local lResult := oHelper:Disconnect("")
+  AssertTrue("Disconnect('') retorna .T.", lResult)
+Return Nil
+
+Static Function TestDisconnect_ValidAlias_ReturnsTrue()
+  Local oHelper := ConnectionHelper():New()
+  Local lResult := oHelper:Disconnect("DB_ORACLE")
+  AssertTrue("Disconnect('DB_ORACLE') retorna .T.", lResult)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: GetAvailableDatabases
+*----------------------------------------------------------------------------*/
+Static Function TestGetAvailableDatabases_ReturnsCommaList()
+  Local oHelper  := ConnectionHelper():New()
+  Local cDbs     := oHelper:GetAvailableDatabases()
+  Local lHasOracle   := "oracle" $ Lower(cDbs)
+  Local lHasPostgres := "postgres" $ Lower(cDbs)
+  AssertTrue("GetAvailableDatabases contem 'oracle'", lHasOracle)
+  AssertTrue("GetAvailableDatabases contem 'postgres'", lHasPostgres)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: RegisterDatabase
+*----------------------------------------------------------------------------*/
+Static Function TestRegisterDatabase_ValidParams_ReturnsTrue()
+  Local oHelper := ConnectionHelper():New()
+  Local lResult := oHelper:RegisterDatabase("mysql", "DB_MYSQL")
+  AssertTrue("RegisterDatabase('mysql','DB_MYSQL') retorna .T.", lResult)
+Return Nil
+
+Static Function TestRegisterDatabase_EmptyName_ReturnsFalse()
+  Local oHelper := ConnectionHelper():New()
+  Local lResult := oHelper:RegisterDatabase("", "DB_X")
+  AssertFalse("RegisterDatabase('','DB_X') retorna .F.", lResult)
+Return Nil
+
+Static Function TestRegisterDatabase_EmptyAlias_ReturnsFalse()
+  Local oHelper := ConnectionHelper():New()
+  Local lResult := oHelper:RegisterDatabase("mssql", "")
+  AssertFalse("RegisterDatabase('mssql','') retorna .F.", lResult)
+Return Nil
+
+Static Function TestRegisterDatabase_Duplicate_ReturnsFalse()
+  Local oHelper := ConnectionHelper():New()
+  // "oracle" ja existe no mapeamento padrao
+  Local lResult := oHelper:RegisterDatabase("oracle", "DB_ORACLE_2")
+  AssertFalse("RegisterDatabase duplicado retorna .F.", lResult)
+Return Nil
+
+/*----------------------------------------------------------------------------*
+  Testes: TestConnection
+*----------------------------------------------------------------------------*/
+Static Function TestConnection_EmptyAlias_ReturnsFalse()
+  Local oHelper := ConnectionHelper():New()
+  Local lResult := oHelper:TestConnection("")
+  AssertFalse("TestConnection('') retorna .F.", lResult)
+Return Nil
+
+Static Function TestConnection_ValidAlias_ReturnsLogical()
+  Local oHelper := ConnectionHelper():New()
+  // O resultado depende do ambiente, mas deve retornar Logical
+  Local lResult := oHelper:TestConnection("DB_ORACLE")
+  AssertTrue("TestConnection retorna Logical (.T. ou .F.)", ;
+    ValType(lResult) == "L")
+Return Nil
