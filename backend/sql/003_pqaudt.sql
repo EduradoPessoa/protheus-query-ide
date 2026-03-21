@@ -1,0 +1,28 @@
+-- ProtheusQuery IDE - Tabela de Auditoria
+-- Banco: SQL Server
+-- Versão: 1.0
+
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[PQAUDT]') AND type in (N'U'))
+BEGIN
+    CREATE TABLE [dbo].[PQAUDT] (
+        [AUD_ID]        CHAR(36)     NOT NULL,
+        [AUD_HISTID]    CHAR(36),
+        [AUD_EMPRESA]   CHAR(2)      NOT NULL,
+        [AUD_USUARIO]   CHAR(20)     NOT NULL,
+        [AUD_IP]        VARCHAR(45)  NOT NULL,
+        [AUD_DTLOG]     DATETIME     NOT NULL,
+        [AUD_ACAO]      CHAR(20)     NOT NULL,
+        [AUD_DETALHE]   NVARCHAR(MAX),
+        CONSTRAINT [PK_PQAUDT] PRIMARY KEY ([AUD_ID])
+    );
+
+    CREATE NONCLUSTERED INDEX [IX_PQAUDT_USUARIO] ON [dbo].[PQAUDT] ([AUD_USUARIO]);
+    CREATE NONCLUSTERED INDEX [IX_PQAUDT_DTLOG] ON [dbo].[PQAUDT] ([AUD_DTLOG]);
+    CREATE NONCLUSTERED INDEX [IX_PQAUDT_ACAO] ON [dbo].[PQAUDT] ([AUD_ACAO]);
+    CREATE NONCLUSTERED INDEX [IX_PQAUDT_HISTID] ON [dbo].[PQAUDT] ([AUD_HISTID]);
+END
+ELSE
+BEGIN
+    PRINT 'Tabela PQAUDT já existe.';
+END
+GO

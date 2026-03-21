@@ -1,0 +1,98 @@
+/*----------------------------------------------------------------------------*
+  LoggerHelper.tlpp
+  Helper para log estruturado da aplicação ProtheusQuery IDE
+  
+  Utiliza a função native do AppServer para logs estruturados
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+/*============================================================================*
+  Função: LogInfo
+  Descrição: Grava log de nível INFO
+*============================================================================*/
+Function LogInfo(cModule, cMessage, aExtra)
+  Local cLogMsg := ""
+  Local cExtra  := ""
+  
+  Default cModule := "PQIDE"
+  
+  cLogMsg := "[" + DToC(Date()) + " " + Time() + "] [INFO] [" + cModule + "] " + cMessage
+  
+  If aExtra != Nil .And. Len(aExtra) > 0
+    cExtra := " | " + EncodeUTF8(JsonSerialize(aExtra))
+    cLogMsg += cExtra
+  EndIf
+  
+  ConOut(cLogMsg)
+  
+  // Grava no log do AppServer se disponível
+  FWLogMsg(INFO, cModule, cMessage, cExtra)
+  
+Return Nil
+
+/*============================================================================*
+  Função: LogWarning
+  Descrição: Grava log de nível WARNING
+*============================================================================*/
+Function LogWarning(cModule, cMessage, aExtra)
+  Local cLogMsg := ""
+  Local cExtra  := ""
+  
+  Default cModule := "PQIDE"
+  
+  cLogMsg := "[" + DToC(Date()) + " " + Time() + "] [WARN] [" + cModule + "] " + cMessage
+  
+  If aExtra != Nil .And. Len(aExtra) > 0
+    cExtra := " | " + EncodeUTF8(JsonSerialize(aExtra))
+    cLogMsg += cExtra
+  EndIf
+  
+  ConOut(cLogMsg)
+  FWLogMsg(WARNING, cModule, cMessage, cExtra)
+  
+Return Nil
+
+/*============================================================================*
+  Função: LogError
+  Descrição: Grava log de nível ERROR
+*============================================================================*/
+Function LogError(cModule, cMessage, aExtra)
+  Local cLogMsg := ""
+  Local cExtra  := ""
+  
+  Default cModule := "PQIDE"
+  
+  cLogMsg := "[" + DToC(Date()) + " " + Time() + "] [ERROR] [" + cModule + "] " + cMessage
+  
+  If aExtra != Nil .And. Len(aExtra) > 0
+    cExtra := " | " + EncodeUTF8(JsonSerialize(aExtra))
+    cLogMsg += cExtra
+  EndIf
+  
+  ConOut(cLogMsg)
+  FWLogMsg(ERROR, cModule, cMessage, cExtra)
+  
+Return Nil
+
+/*============================================================================*
+  Função: LogDebug
+  Descrição: Grava log de nível DEBUG (apenas em ambiente de desenvolvimento)
+*============================================================================*/
+Function LogDebug(cModule, cMessage, aExtra)
+  #ifdef DEBUG
+    Local cLogMsg := ""
+    Local cExtra  := ""
+    
+    Default cModule := "PQIDE"
+    
+    cLogMsg := "[" + DToC(Date()) + " " + Time() + "] [DEBUG] [" + cModule + "] " + cMessage
+    
+    If aExtra != Nil .And. Len(aExtra) > 0
+      cExtra := " | " + EncodeUTF8(JsonSerialize(aExtra))
+      cLogMsg += cExtra
+    EndIf
+    
+    ConOut(cLogMsg)
+  #endif
+Return Nil
