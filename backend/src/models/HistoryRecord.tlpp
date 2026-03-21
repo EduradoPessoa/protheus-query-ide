@@ -1,0 +1,70 @@
+#include "tlpp-core.tlpp"
+
+namespace models
+
+class HistoryRecord
+
+    public data HIS_ID   as char
+    public data HIS_EMPRESA as char
+    public data HIS_FILIAL as char
+    public data HIS_USUARIO as char
+    public data HIS_DTEXEC as char
+    public data HIS_BANCO as char
+    public data HIS_SQL as char
+    public data HIS_TIPO as char
+    public data HIS_ROWS as numeric
+    public data HIS_TEMPO as numeric
+    public data HIS_STATUS as char
+    public data HIS_ERRO as char
+    public data HIS_DELETED as char
+
+    public method new() constructor
+
+    public method toJson() as char
+
+endclass
+
+method new() class HistoryRecord
+
+    ::HIS_ID    := ""
+    ::HIS_EMPRESA := ""
+    ::HIS_FILIAL := ""
+    ::HIS_USUARIO := ""
+    ::HIS_DTEXEC := ""
+    ::HIS_BANCO := ""
+    ::HIS_SQL := ""
+    ::HIS_TIPO := ""
+    ::HIS_ROWS := 0
+    ::HIS_TEMPO := 0
+    ::HIS_STATUS := ""
+    ::HIS_ERRO := ""
+    ::HIS_DELETED := "N"
+
+return self
+
+method toJson() class HistoryRecord
+
+    local cJson as char
+    local oJson as json
+
+    oJson := JsonObject():New()
+
+    oJson["HIS_ID"]    := ::HIS_ID
+    oJson["HIS_EMPRESA"] := ::HIS_EMPRESA
+    oJson["HIS_FILIAL"] := ::HIS_FILIAL
+    oJson["HIS_USUARIO"] := ::HIS_USUARIO
+    oJson["HIS_DTEXEC"] := ::HIS_DTEXEC
+    oJson["HIS_BANCO"] := ::HIS_BANCO
+    oJson["HIS_SQL"] := ::HIS_SQL
+    oJson["HIS_TIPO"] := ::HIS_TIPO
+    oJson["HIS_ROWS"] := ::HIS_ROWS
+    oJson["HIS_TEMPO"] := ::HIS_TEMPO
+    oJson["HIS_STATUS"] := ::HIS_STATUS
+    oJson["HIS_ERRO"] := ::HIS_ERRO
+    oJson["HIS_DELETED"] := ::HIS_DELETED
+
+    cJson := oJson:toJson()
+
+    oJson:Destroy()
+
+return cJson

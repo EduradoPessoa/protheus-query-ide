@@ -1,0 +1,223 @@
+/*----------------------------------------------------------------------------*
+  SchemaService.tlpp
+  Servico para manipulacao de schema do banco de dados
+  
+  Funcionalidades:
+  - Listar tabelas do banco de dados
+  - Listar colunas de uma tabela
+  - Suporte a multiplas conexoes (default, oracle, postgres)
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+/*============================================================================*
+  Metodo: GetTables
+  Descricao: Lista tabelas do banco de dados
+  
+  Parametros:
+    cDatabase - Nome amigavel do banco ("default", "oracle", "postgres")
+  
+  Retorno:
+    Array - Array com nome das tabelas
+  
+  Exemplos:
+    aTables := SchemaService():GetTables("default")
+    aTables := SchemaService():GetTables("postgres")
+ *============================================================================*/
+Method GetTables(cDatabase As Character) As Array
+  Local aTables   As Array := {}
+  Local cAlias    As Character := ""
+  Local cConnName As Character := ""
+  Local oConn     As Object
+  Local lIsDefault As Logical
+  
+  Default cDatabase := ""
+  
+  lIsDefault := Empty(cDatabase) .Or. Lower(AllTrim(cDatabase)) == "default"
+  
+  If !lIsDefault
+    oConn := ConnectionHelper():New()
+    cAlias := oConn:Connect(cDatabase)
+    cConnName := cAlias
+  EndIf
+  
+  aTables := GetTablesQuery(cConnName)
+  
+  If !Empty(cAlias)
+    oConn:Disconnect(cAlias)
+  EndIf
+  
+  Return aTables
+
+/*============================================================================*
+  Metodo: GetColumns
+  Descricao: Lista colunas de uma tabela
+  
+  Parametros:
+    cTable   - Nome da tabela
+    cDatabase - Nome amigavel do banco ("default", "oracle", "postgres")
+  
+  Retorno:
+    Array - Array de objetos com name, type, size, dec
+  
+  Exemplos:
+    aCols := SchemaService():GetColumns("SA1")
+    aCols := SchemaService():GetColumns("SA1", "postgres")
+ *============================================================================*/
+Method GetColumns(cTable As Character, cDatabase As Character) As Array
+  Local aColumns  As Array := {}
+  Local cAlias    As Character := ""
+  Local cTableUp  As Character := ""
+  Local cQuery    As Character := ""
+  Local cConnName As Character := ""
+  Local oConn     As Object
+  Local lIsDefault As Logical
+  
+  Default cDatabase := ""
+  Default cTable    := ""
+  
+  If Empty(cTable)
+    Return aColumns
+  EndIf
+  
+  cTableUp := Upper(AllTrim(cTable))
+  
+  lIsDefault := Empty(cDatabase) .Or. Lower(AllTrim(cDatabase)) == "default"
+  
+  If !lIsDefault
+    oConn := ConnectionHelper():New()
+    cAlias := oConn:Connect(cDatabase)
+    cConnName := cAlias
+  EndIf
+  
+  cQuery := GetColumnsQuery(cTableUp, cConnName)
+  
+  If Empty(cAlias)
+    dbUseArea(.T., , cQuery, "SCHEMA_COLS", .F., .F.)
+  Else
+    MsUseQuery(cAlias, cQuery, "SCHEMA_COLS")
+  EndIf
+  
+  If "SCHEMA_COLS"->(Eof()) .And. "SCHEMA_COLS"->(Bof())
+    "SCHEMA_COLS"->(DbCloseArea())
+    If !Empty(cAlias)
+      oConn:Disconnect(cAlias)
+    EndIf
+    Return aColumns
+  EndIf
+  
+  "SCHEMA_COLS"->(DbGoTop())
+  
+  While !"SCHEMA_COLS">(Eof())
+    Local oCol As Object := JsonObject():New()
+    
+    oCol:Set("name", "SCHEMA_COLS"->(FieldGet(FieldPos("COLUMN_NAME"))))
+    oCol:Set("type", "SCHEMA_COLS"->(FieldGet(FieldPos("COLUMN_TYPE"))))
+    oCol:Set("size", "SCHEMA_COLS"->(FieldGet(FieldPos("COLUMN_SIZE"))))
+    oCol:Set("dec", "SCHEMA_COLS"->(FieldGet(FieldPos("COLUMN_DEC"))))
+    
+    AAdd(aColumns, oCol)
+    
+    "SCHEMA_COLS"->(DbSkip())
+  EndDo
+  
+  "SCHEMA_COLS"->(DbCloseArea())
+  
+  If !Empty(cAlias)
+    oConn:Disconnect(cAlias)
+  EndIf
+  
+  Return aColumns
+
+/*============================================================================*
+  Funcao: GetTablesQuery
+  Descricao: Retorna array de tabelas conforme o banco
+  
+  Parametros:
+    cConnName - Nome da conexao
+  
+  Retorno:
+    Array - Array com nome das tabelas
+ *============================================================================*/
+Static Function GetTablesQuery(cConnName As Character) As Array
+  Local aTables As Array := {}
+  Local cQuery  As Character := ""
+  
+  If cConnName == "DB_ORACLE"
+    cQuery := "SELECT TABLE_NAME FROM USER_TABLES ORDER BY TABLE_NAME"
+    dbUseArea(.T., , cQuery, "TBLS", .F., .F.)
+    
+    If !Empty(TBLS) .And. !TBLS->(Eof())
+      TBLS->(DbGoTop())
+      While !TBLS->(Eof())
+        AAdd(aTables, TBLS->TABLE_NAME)
+        TBLS->(DbSkip())
+      EndDo
+    EndIf
+    TBLS->(DbCloseArea())
+    
+  ElseIf cConnName == "DB_POSTGRES"
+    cQuery := "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
+    dbUseArea(.T., , cQuery, "TBLS", .F., .F.)
+    
+    If !Empty(TBLS) .And. !TBLS->(Eof())
+      TBLS->(DbGoTop())
+      While !TBLS->(Eof())
+        AAdd(aTables, TBLS->table_name)
+        TBLS->(DbSkip())
+      EndDo
+    EndIf
+    TBLS->(DbCloseArea())
+    
+  Else
+    aTables := RetSqlName()
+  EndIf
+  
+  Return aTables
+
+/*============================================================================*
+  Funcao: GetColumnsQuery
+  Descricao: Retorna query especifica para buscar colunas conforme o banco
+  
+  Parametros:
+    cTable   - Nome da tabela
+    cConnName - Nome da conexao
+  
+  Retorno:
+    Character - Query SQL
+ *============================================================================*/
+Static Function GetColumnsQuery(cTable As Character, cConnName As Character) As Character
+  Local cQuery As Character := ""
+  
+  Do Case
+    Case cConnName == "DB_ORACLE"
+      cQuery := "SELECT COLUMN_NAME, DATA_TYPE AS COLUMN_TYPE, DATA_LENGTH AS COLUMN_SIZE, " + ;
+                "DATA_PRECISION AS COLUMN_DEC " + ;
+                "FROM USER_TAB_COLUMNS " + ;
+                "WHERE TABLE_NAME = '" + cTable + "' " + ;
+                "ORDER BY COLUMN_ID"
+    
+    Case cConnName == "DB_POSTGRES"
+      cQuery := "SELECT column_name AS COLUMN_NAME, data_type AS COLUMN_TYPE, " + ;
+                "character_maximum_length AS COLUMN_SIZE, numeric_scale AS COLUMN_DEC " + ;
+                "FROM information_schema.columns " + ;
+                "WHERE table_name = '" + Lower(cTable) + "' " + ;
+                "ORDER BY ordinal_position"
+    
+    Otherwise
+      cQuery := "SELECT x3_campo AS COLUMN_NAME, x3_tipo AS COLUMN_TYPE, x3_tamanho AS COLUMN_SIZE, x3_dec AS COLUMN_DEC " + ;
+                "FROM " + RetSqlName("SX3") + " " + ;
+                "WHERE x3_existe = 'S' " + ;
+                "AND x3_nivel >= 1 " + ;
+                "AND x3_deltr <> 'S' " + ;
+                "AND x3_visual <> 'V' " + ;
+                "AND x3_campo LIKE '" + cTable + "%' " + ;
+                "ORDER BY x3_ordem"
+  EndCase
+  
+  Return cQuery
+
+Class SchemaService
+  Method GetTables(cDatabase)
+  Method GetColumns(cTable, cDatabase)
+EndClass

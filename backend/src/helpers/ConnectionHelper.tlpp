@@ -1,0 +1,144 @@
+/*----------------------------------------------------------------------------*
+  ConnectionHelper.tlpp
+  Helper para gerenciamento de conexoes de banco de dados
+  
+  Utiliza as funcoes nativas do AppServer:
+  - MsConnect() para abrir conexoes adicionais
+  - MsDisconnect() para fechar conexoes
+  
+  O mapeamento de nomes amigaveis para aliases do AppServer.ini
+  e facilmente extensivel atraves do array aDatabaseAliases
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+/*============================================================================*
+  Mapeamento de nomes amigaveis para aliases do AppServer.ini
+  Adicione novos bancos aqui para estender o suporte
+*============================================================================*/
+Static aDatabaseAliases := { ;
+  { "oracle",   "DB_ORACLE"  }, ;
+  { "postgres", "DB_POSTGRES" } ;
+}
+
+/*============================================================================*
+  Metodo: Connect
+  Descricao: Abre conexao com o banco de dados especificado
+  
+  Parametros:
+    cDatabase - Nome amigavel do banco ("default", "oracle", "postgres")
+  
+  Retorno:
+    Character - Alias da conexao ("": conexao padrao)
+  
+  Exemplos:
+    cAlias := ConnectionHelper():Connect("default")  // Retorna ""
+    cAlias := ConnectionHelper():Connect("oracle")   // Retorna "DB_ORACLE"
+    cAlias := ConnectionHelper():Connect("postgres") // Retorna "DB_POSTGRES"
+*============================================================================*/
+Method Connect(cDatabase As Character) As Character
+  Local cAlias    As Character := ""
+  Local nPos      As Integer   := 0
+  
+  Default cDatabase := ""
+  
+  If Empty(cDatabase) .Or. Lower(AllTrim(cDatabase)) == "default"
+    Return ""
+  EndIf
+  
+  cDatabase := Lower(AllTrim(cDatabase))
+  
+  nPos := AScan(aDatabaseAliases, {|x| Lower(x[1]) == cDatabase})
+  
+  If nPos == 0
+    UserException("Banco nao reconhecido: " + cDatabase + ;
+                  ". Mapeamentos disponiveis: " + GetAvailableDatabases())
+  EndIf
+  
+  cAlias := aDatabaseAliases[nPos][2]
+  
+  If !MsConnect(cAlias)
+    UserException("MsConnect falhou para alias '" + cAlias + ;
+                  "'. Verifique a configuracao no AppServer.ini.")
+  EndIf
+  
+  LogInfo("ConnectionHelper", "Conexao aberta: " + cDatabase + " (alias: " + cAlias + ")")
+  
+  Return cAlias
+
+/*============================================================================*
+  Metodo: Disconnect
+  Descricao: Fecha conexao adicional com o banco de dados
+  
+  Parametros:
+    cAlias - Alias da conexao a ser fechada
+  
+  Retorno:
+    Logical - .T. se sucesso, .F. se falha
+*============================================================================*/
+Method Disconnect(cAlias As Character) As Logical
+  
+  If Empty(cAlias)
+    Return .T.
+  EndIf
+  
+  MsDisconnect(cAlias)
+  
+  LogInfo("ConnectionHelper", "Conexao fechada: " + cAlias)
+  
+  Return .T.
+
+/*============================================================================*
+  Metodo: GetAvailableDatabases
+  Descricao: Retorna string com lista de bancos disponiveis
+  
+  Retorno:
+    Character - Lista separada por virgula
+*============================================================================*/
+Method GetAvailableDatabases() As Character
+  Local cList := ""
+  Local i     := 0
+  
+  For i := 1 To Len(aDatabaseAliases)
+    cList += aDatabaseAliases[i][1]
+    If i < Len(aDatabaseAliases)
+      cList += ", "
+    EndIf
+  Next i
+  
+  Return cList
+
+/*============================================================================*
+  Metodo: RegisterDatabase
+  Descricao: Registra novo mapeamento de banco (extensibilidade)
+  
+  Parametros:
+    cFriendlyName - Nome amigavel (ex: "mysql")
+    cAlias        - Alias no AppServer.ini (ex: "DB_MYSQL")
+  
+  Retorno:
+    Logical - .T. se sucesso
+*============================================================================*/
+Method RegisterDatabase(cFriendlyName As Character, cAlias As Character) As Logical
+  
+  If Empty(cFriendlyName) .Or. Empty(cAlias)
+    Return .F.
+  EndIf
+  
+  If AScan(aDatabaseAliases, {|x| Lower(x[1]) == Lower(cFriendlyName)}) > 0
+    LogWarning("ConnectionHelper", "Banco ja registrado: " + cFriendlyName)
+    Return .F.
+  EndIf
+  
+  AAdd(aDatabaseAliases, {cFriendlyName, cAlias})
+  
+  LogInfo("ConnectionHelper", "Banco registrado: " + cFriendlyName + " -> " + cAlias)
+  
+  Return .T.
+
+Class ConnectionHelper
+  Method Connect(cDatabase)
+  Method Disconnect(cAlias)
+  Method GetAvailableDatabases()
+  Method RegisterDatabase(cFriendlyName, cAlias)
+EndClass
