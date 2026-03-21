@@ -1,0 +1,34 @@
+# Node / Angular
+node_modules/
+dist/
+.angular/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TLPP / Protheus
+*.tlppc
+*.o
+*.obj
+*.pjs
+build/
+logs/
+
+# Backups
+*.bak
+*.old
+
+# Environment files (sensíveis)
+.env
+.env.local
