@@ -1,0 +1,648 @@
+/*----------------------------------------------------------------------------*
+  FavoriteController.tlpp
+  Controller REST para manipulacao de favoritos
+  
+  Endpoints:
+  - GET    /api/pqide/v1/favorites     - Lista favoritos
+  - POST   /api/pqide/v1/favorites     - Cria favorito
+  - PUT    /api/pqide/v1/favorites/:id - Atualiza favorito
+  - DELETE /api/pqide/v1/favorites/:id - Remove favorito
+  
+  Funcionalidades:
+  - Listar favoritos por usuario (paginado)
+  - Criar novo favorito
+  - Atualizar favorito existente
+  - Remover favorito (exclusao logica)
+  - Retorno formatado em JSON
+  - Tratamento centralizado de erros
+  
+  Dependencias:
+  - FavoriteService: Operacoes CRUD de favoritos
+  - FavoriteRecord: Modelo de dados do favorito
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+#include "tlpp-core.tlpp"
+
+#define METHOD_POST   "POST"
+#define METHOD_GET    "GET"
+#define METHOD_PUT    "PUT"
+#define METHOD_DELETE "DELETE"
+
+#define STATUS_200 200
+#define STATUS_201 201
+#define STATUS_400 400
+#define STATUS_404 404
+#define STATUS_422 422
+#define STATUS_500 500
+
+#define ERR_INVALID_INPUT   "INVALID_INPUT"
+#define ERR_NOT_FOUND      "NOT_FOUND"
+#define ERR_CREATE_FAILED  "CREATE_FAILED"
+#define ERR_UPDATE_FAILED  "UPDATE_FAILED"
+#define ERR_DELETE_FAILED  "DELETE_FAILED"
+
+Static cEndpoint := "/api/pqide/v1/favorites"
+
+/*============================================================================*
+  Funcao: U_FAVORITE_CONTROLLER
+  Descricao: Factory para criacao de instancia do controller
+ *============================================================================*/
+Function U_FAVORITE_CONTROLLER()
+Return(FavoriteController():New())
+
+/*============================================================================*
+  Construtor
+ *============================================================================*/
+Method New() Class FavoriteController
+Return(Self)
+
+/*============================================================================*
+  Metodo: OnRequest
+  Descricao: Hook chamado pelo framework REST para processar requisicoes
+ *============================================================================*/
+Method OnRequest(cMethod As Character) As Logical
+  Local cRoute    As Character := Upper(FwRest():GetUri())
+  Local cId       As Character := ""
+  
+  cId := Self:GetIdFromRoute()
+  
+  Do Case
+    Case cMethod == METHOD_GET .And. Empty(cId)
+      Return Self:GetFavorites()
+    
+    Case cMethod == METHOD_GET .And. !Empty(cId)
+      Return Self:GetFavoriteById(cId)
+    
+    Case cMethod == METHOD_POST .And. Empty(cId)
+      Return Self:CreateFavorite()
+    
+    Case cMethod == METHOD_PUT .And. !Empty(cId)
+      Return Self:UpdateFavorite(cId)
+    
+    Case cMethod == METHOD_DELETE .And. !Empty(cId)
+      Return Self:DeleteFavorite(cId)
+    
+    Otherwise
+      Return .F.
+  EndCase
+  
+Return .F.
+
+/*============================================================================*
+  Metodo: GetIdFromRoute
+  Descricao: Extrai o ID da URL da requisicao
+  
+  Retorno:
+    Character - ID do recurso ou string vazia
+ *============================================================================*/
+Method GetIdFromRoute() As Character
+  Local cUri   As Character := ""
+  Local aParts As Array := {}
+  Local nPos   As Numeric := 0
+  Local cId    As Character := ""
+  
+  cUri := FwRest():GetUri()
+  
+  aParts := StrTokArr2(cUri, "/", .T.)
+  
+  For nPos := Len(aParts) To 1 Step -1
+    If !Empty(aParts[nPos]) .And. Len(aParts[nPos]) > 0
+      cId := aParts[nPos]
+      Exit
+    EndIf
+  Next
+  
+  If IsNumeric(cId)
+    cId := ""
+  EndIf
+  
+Return cId
+
+/*============================================================================*
+  Metodo: GetFavorites
+  Descricao: Lista favoritos do usuario logado com paginacao
+  
+  Query Params:
+    page     - Numero da pagina (padrao: 1)
+    pageSize - Tamanho da pagina (padrao: 20)
+  
+  Response 200:
+    {
+      "data": [
+        {
+          "id": "uuid",
+          "nome": "Query Principal",
+          "desc": "Descricao do favorito",
+          "sql": "SELECT * FROM SA1010",
+          "banco": "default",
+          "empresa": "01",
+          "dataCriacao": "2024-01-01 10:00:00",
+          "dataAlteracao": "2024-01-01 10:00:00"
+        }
+      ],
+      "pagination": {
+        "page": 1,
+        "pageSize": 20,
+        "total": 50,
+        "totalPages": 3
+      },
+      "success": true
+    }
+ *============================================================================*/
+Method GetFavorites() As Logical
+  Local cUser    As Character := ""
+  Local nPage    As Numeric   := 1
+  Local nPageSize As Numeric  := 20
+  Local nTotal   As Numeric   := 0
+  Local aFavorites As Array   := {}
+  Local oService As Object    := Nil
+  Local cPage    As Character  := ""
+  Local cPageSize As Character := ""
+  
+  cUser := Self:GetCurrentUser()
+  
+  cPage     := FwRest():GetHeader("X-Page")
+  cPageSize := FwRest():GetHeader("X-Page-Size")
+  
+  If !Empty(cPage)
+    nPage := Val(cPage)
+  EndIf
+  
+  If !Empty(cPageSize)
+    nPageSize := Val(cPageSize)
+  EndIf
+  
+  If nPage < 1
+    nPage := 1
+  EndIf
+  
+  If nPageSize < 1 .Or. nPageSize > 100
+    nPageSize := 20
+  EndIf
+  
+  oService := FavoriteService():New()
+  
+  aFavorites := oService:GetFavorites(cUser, nPage, nPageSize)
+  nTotal     := oService:GetTotalByUser(cUser)
+  
+  Return Self:SendSuccessList(aFavorites, nPage, nPageSize, nTotal)
+
+/*============================================================================*
+  Metodo: GetFavoriteById
+  Descricao: Busca favorito por ID
+  
+  Response 200:
+    {
+      "id": "uuid",
+      "nome": "Query Principal",
+      "desc": "Descricao do favorito",
+      "sql": "SELECT * FROM SA1010",
+      "banco": "default",
+      "empresa": "01",
+      "usuario": "admin",
+      "dataCriacao": "2024-01-01 10:00:00",
+      "dataAlteracao": "2024-01-01 10:00:00"
+    }
+  
+  Response 404:
+    {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "Favorito nao encontrado"
+      }
+    }
+ *============================================================================*/
+Method GetFavoriteById(cId As Character) As Logical
+  Local oService   As Object := Nil
+  Local oFavorite As Object := Nil
+  
+  If Empty(cId)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "ID do favorito nao fornecido")
+  EndIf
+  
+  oService := FavoriteService():New()
+  oFavorite := oService:GetFavoriteById(cId)
+  
+  If Empty(oFavorite:Get("id"))
+    Return Self:SendError(STATUS_404, ERR_NOT_FOUND, "Favorito nao encontrado")
+  EndIf
+  
+  Return Self:SendSuccess(oFavorite)
+
+/*============================================================================*
+  Metodo: CreateFavorite
+  Descricao: Cria novo favorito
+  
+  Request Body:
+    {
+      "nome": "Query Principal",
+      "desc": "Descricao do favorito",
+      "sql": "SELECT * FROM SA1010",
+      "banco": "default",
+      "empresa": "01"
+    }
+  
+  Response 201:
+    {
+      "id": "uuid",
+      "nome": "Query Principal",
+      "desc": "Descricao do favorito",
+      "sql": "SELECT * FROM SA1010",
+      "banco": "default",
+      "empresa": "01",
+      "dataCriacao": "2024-01-01 10:00:00",
+      "success": true
+    }
+  
+  Response 400/422:
+    {
+      "error": {
+        "code": "INVALID_INPUT",
+        "message": "Mensagem de erro"
+      }
+    }
+ *============================================================================*/
+Method CreateFavorite() As Logical
+  Local cBody      As Character := ""
+  Local oRequest   As Object    := Nil
+  Local oFavorite  As Object    := Nil
+  Local oService   As Object    := Nil
+  Local cNome      As Character := ""
+  Local cDesc      As Character := ""
+  Local cSql       As Character := ""
+  Local cBanco     As Character := ""
+  Local cEmpresa   As Character := ""
+  Local cUser      As Character := ""
+  Local lCreated   As Logical   := .F.
+  
+  cBody := FwRest():GetBody()
+  
+  If Empty(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Request body vazio ou invalido")
+  EndIf
+  
+  oRequest := JsonObject():New()
+  
+  If !oRequest:FromJson(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "JSON invalido no request body")
+  EndIf
+  
+  cNome    := oRequest:GetValue("nome", "")
+  cDesc    := oRequest:GetValue("desc", "")
+  cSql     := oRequest:GetValue("sql", "")
+  cBanco   := oRequest:GetValue("banco", "default")
+  cEmpresa := oRequest:GetValue("empresa", "")
+  
+  If Empty(cNome)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Nome do favorito e obrigatorio")
+  EndIf
+  
+  If Empty(cSql)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "SQL do favorito e obrigatorio")
+  EndIf
+  
+  cUser := Self:GetCurrentUser()
+  
+  oFavorite := JsonObject():New()
+  oFavorite:Set("id",       GetUuid())
+  oFavorite:Set("nome",     cNome)
+  oFavorite:Set("desc",     cDesc)
+  oFavorite:Set("sql",      cSql)
+  oFavorite:Set("banco",    cBanco)
+  oFavorite:Set("empresa",  cEmpresa)
+  oFavorite:Set("usuario",  cUser)
+  oFavorite:Set("dataCriacao", dToC(Date()) + " " + Time())
+  oFavorite:Set("dataAlteracao", dToC(Date()) + " " + Time())
+  
+  oService := FavoriteService():New()
+  lCreated := oService:CreateFavorite(oFavorite)
+  
+  If lCreated
+    Return Self:SendCreated(oFavorite)
+  Else
+    Return Self:SendError(STATUS_422, ERR_CREATE_FAILED, "Erro ao criar favorito")
+  EndIf
+
+/*============================================================================*
+  Metodo: UpdateFavorite
+  Descricao: Atualiza favorito existente
+  
+  Request Body:
+    {
+      "nome": "Query Atualizada",
+      "desc": "Nova descricao",
+      "sql": "SELECT * FROM SA1010 WHERE A1_FILIAL = '01'",
+      "banco": "default"
+    }
+  
+  Response 200:
+    {
+      "id": "uuid",
+      "nome": "Query Atualizada",
+      "desc": "Nova descricao",
+      "sql": "SELECT * FROM SA1010 WHERE A1_FILIAL = '01'",
+      "banco": "default",
+      "dataAlteracao": "2024-01-01 12:00:00",
+      "success": true
+    }
+  
+  Response 404:
+    {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "Favorito nao encontrado"
+      }
+    }
+ *============================================================================*/
+Method UpdateFavorite(cId As Character) As Logical
+  Local cBody      As Character := ""
+  Local oRequest   As Object    := Nil
+  Local oService   As Object    := Nil
+  Local oFavorite  As Object    := Nil
+  Local oUpdated   As Object    := Nil
+  Local cNome      As Character := ""
+  Local cDesc      As Character := ""
+  Local cSql       As Character := ""
+  Local cBanco     As Character := ""
+  Local lUpdated   As Logical   := .F.
+  
+  If Empty(cId)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "ID do favorito nao fornecido")
+  EndIf
+  
+  cBody := FwRest():GetBody()
+  
+  If Empty(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Request body vazio ou invalido")
+  EndIf
+  
+  oRequest := JsonObject():New()
+  
+  If !oRequest:FromJson(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "JSON invalido no request body")
+  EndIf
+  
+  oService := FavoriteService():New()
+  oFavorite := oService:GetFavoriteById(cId)
+  
+  If Empty(oFavorite:Get("id"))
+    Return Self:SendError(STATUS_404, ERR_NOT_FOUND, "Favorito nao encontrado")
+  EndIf
+  
+  cNome  := oRequest:GetValue("nome", oFavorite:Get("nome"))
+  cDesc  := oRequest:GetValue("desc", oFavorite:Get("desc"))
+  cSql   := oRequest:GetValue("sql", oFavorite:Get("sql"))
+  cBanco := oRequest:GetValue("banco", oFavorite:Get("banco"))
+  
+  oUpdated := JsonObject():New()
+  oUpdated:Set("id",             cId)
+  oUpdated:Set("nome",           cNome)
+  oUpdated:Set("desc",           cDesc)
+  oUpdated:Set("sql",            cSql)
+  oUpdated:Set("banco",          cBanco)
+  oUpdated:Set("empresa",        oFavorite:Get("empresa"))
+  oUpdated:Set("usuario",        oFavorite:Get("usuario"))
+  oUpdated:Set("dataCriacao",    oFavorite:Get("dataCriacao"))
+  oUpdated:Set("dataAlteracao",  dToC(Date()) + " " + Time())
+  
+  lUpdated := oService:UpdateFavorite(cId, oUpdated)
+  
+  If lUpdated
+    Return Self:SendSuccess(oUpdated)
+  Else
+    Return Self:SendError(STATUS_422, ERR_UPDATE_FAILED, "Erro ao atualizar favorito")
+  EndIf
+
+/*============================================================================*
+  Metodo: DeleteFavorite
+  Descricao: Remove favorito (exclusao logica)
+  
+  Response 200:
+    {
+      "success": true,
+      "message": "Favorito removido com sucesso"
+    }
+  
+  Response 404:
+    {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "Favorito nao encontrado"
+      }
+    }
+ *============================================================================*/
+Method DeleteFavorite(cId As Character) As Logical
+  Local oService As Object := Nil
+  Local oFavorite As Object := Nil
+  Local lDeleted  As Logical := .F.
+  
+  If Empty(cId)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "ID do favorito nao fornecido")
+  EndIf
+  
+  oService := FavoriteService():New()
+  oFavorite := oService:GetFavoriteById(cId)
+  
+  If Empty(oFavorite:Get("id"))
+    Return Self:SendError(STATUS_404, ERR_NOT_FOUND, "Favorito nao encontrado")
+  EndIf
+  
+  lDeleted := oService:SoftDelete(cId)
+  
+  If lDeleted
+    Return Self:SendDeleted()
+  Else
+    Return Self:SendError(STATUS_422, ERR_DELETE_FAILED, "Erro ao remover favorito")
+  EndIf
+
+/*============================================================================*
+  Metodo: GetCurrentUser
+  Descricao: Obtem o usuario logado
+  
+  Retorno:
+    Character - Codigo do usuario
+ *============================================================================*/
+Method GetCurrentUser() As Character
+  Local cUser As Character := ""
+  
+  cUser := HttpSession():GetValue("CUSERNAME")
+  
+  If Empty(cUser)
+    cUser := "anonymous"
+  EndIf
+  
+Return cUser
+
+/*============================================================================*
+  Metodo: SendSuccess
+  Descricao: Envia resposta de sucesso (objeto unico)
+  
+  Parametros:
+    oData - Objeto com dados
+  
+  Retorno:
+    Logical - .T. (sempre)
+ *============================================================================*/
+Method SendSuccess(oData As Object) As Logical
+  Local cJson As Character := ""
+  Local oResp := JsonObject():New()
+  
+  oResp["success"] := .T.
+  oResp["data"]    := oData
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/*============================================================================*
+  Metodo: SendSuccessList
+  Descricao: Envia resposta de sucesso (lista paginada)
+  
+  Parametros:
+    aData     - Array com dados
+    nPage     - Numero da pagina
+    nPageSize - Tamanho da pagina
+    nTotal    - Total de registros
+  
+  Retorno:
+    Logical - .T. (sempre)
+ *============================================================================*/
+Method SendSuccessList(aData As Array, nPage As Numeric, nPageSize As Numeric, nTotal As Numeric) As Logical
+  Local cJson   As Character := ""
+  Local oResp   As JsonObject := JsonObject():New()
+  Local oPag    As JsonObject := JsonObject():New()
+  Local nTotalPages As Numeric := 0
+  
+  nTotalPages := Ceil(nTotal / nPageSize)
+  
+  If nTotalPages < 1
+    nTotalPages := 1
+  EndIf
+  
+  oResp["success"]    := .T.
+  oResp["data"]       := aData
+  
+  oPag["page"]       := nPage
+  oPag["pageSize"]   := nPageSize
+  oPag["total"]      := nTotal
+  oPag["totalPages"] := nTotalPages
+  
+  oResp["pagination"] := oPag
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/*============================================================================*
+  Metodo: SendCreated
+  Descricao: Envia resposta de recurso criado
+  
+  Parametros:
+    oData - Objeto com dados
+  
+  Retorno:
+    Logical - .T. (sempre)
+ *============================================================================*/
+Method SendCreated(oData As Object) As Logical
+  Local cJson As Character := ""
+  Local oResp := JsonObject():New()
+  
+  oResp["success"] := .T.
+  oResp["data"]    := oData
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_201)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/*============================================================================*
+  Metodo: SendDeleted
+  Descricao: Envia resposta de recurso excluido
+  
+  Retorno:
+    Logical - .T. (sempre)
+ *============================================================================*/
+Method SendDeleted() As Logical
+  Local cJson As Character := ""
+  Local oResp := JsonObject():New()
+  
+  oResp["success"] := .T.
+  oResp["message"] := "Favorito removido com sucesso"
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/*============================================================================*
+  Metodo: SendError
+  Descricao: Envia resposta de erro
+  
+  Parametros:
+    nStatus  - Codigo HTTP de erro
+    cCode    - Codigo de erro interno
+    cMessage - Mensagem de erro
+  
+  Retorno:
+    Logical - .F. (sempre)
+ *============================================================================*/
+Method SendError(nStatus As Numeric, cCode As Character, cMessage As Character) As Logical
+  Local cJson  As Character := ""
+  Local oError As JsonObject := JsonObject():New()
+  Local oResp  As JsonObject := JsonObject():New()
+  
+  oError["code"]    := cCode
+  oError["message"] := cMessage
+  
+  oResp["error"] := oError
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(nStatus)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oError:Destroy()
+  oResp:Destroy()
+  
+Return .F.
+
+Class FavoriteController
+  Method New()
+  Method OnRequest(cMethod)
+  Method GetIdFromRoute()
+  Method GetFavorites()
+  Method GetFavoriteById(cId)
+  Method CreateFavorite()
+  Method UpdateFavorite(cId)
+  Method DeleteFavorite(cId)
+  Method GetCurrentUser()
+  Method SendSuccess(oData)
+  Method SendSuccessList(aData, nPage, nPageSize, nTotal)
+  Method SendCreated(oData)
+  Method SendDeleted()
+  Method SendError(nStatus, cCode, cMessage)
+EndClass

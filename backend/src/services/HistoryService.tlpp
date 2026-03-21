@@ -1,0 +1,313 @@
+/*----------------------------------------------------------------------------*
+  HistoryService.tlpp
+  Servico para manipulacao do historico de execucoes de queries
+  
+  Funcionalidades:
+  - Inserir novo registro de historico
+  - Listar historico paginado por usuario
+  - Buscar historico por ID
+  - Exclusao logica (soft-delete)
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+/*============================================================================*
+  Metodo: InsertHistory
+  Descricao: Insere novo registro no historico
+  
+  Parametros:
+    oHistoryRecord - Objeto com os dados do historico
+    
+  Retorno:
+    Logical - .T. se sucesso, .F. se erro
+    
+  Estrutura do objeto oHistoryRecord:
+    - id       (Character): UUID do registro
+    - empresa  (Character): Codigo da empresa
+    - filial   (Character): Codigo da filial
+    - usuario  (Character): Codigo do usuario
+    - banco    (Character): Nome do banco executado
+    - sql      (Character): Query executada
+    - tipo     (Character): Tipo da operacao (SELECT, INSERT, UPDATE, DELETE, DDL)
+    - rows     (Numeric):   Numero de linhas afetadas
+    - tempo    (Numeric):   Tempo de execucao em ms
+    - status   (Character): Status (S=Sucesso, E=Erro)
+    - erro     (Character): Mensagem de erro (opcional)
+    
+  Exemplos:
+    Local oRecord := JsonObject():New()
+    oRecord:Set("id",       GetUuid())
+    oRecord:Set("empresa",  cEmpAnt)
+    oRecord:Set("filial",   cFilAnt)
+    oRecord:Set("usuario",  cUsername)
+    oRecord:Set("banco",    "default")
+    oRecord:Set("sql",      cSql)
+    oRecord:Set("tipo",     "SELECT")
+    oRecord:Set("rows",     nRows)
+    oRecord:Set("tempo",    nTempo)
+    oRecord:Set("status",   "S")
+    lOk := HistoryService():InsertHistory(oRecord)
+ *============================================================================*/
+Method InsertHistory(oHistoryRecord As Object) As Logical
+  Local lRet       As Logical := .F.
+  Local cSql       As Character := ""
+  Local cTable     As Character := ""
+  
+  Default oHistoryRecord := JsonObject():New()
+  
+  If Empty(oHistoryRecord:Get("id"))
+    Return lRet
+  EndIf
+  
+  cTable := RetSqlName("PQHIST")
+  
+  cSql := "INSERT INTO " + cTable + " (HIS_ID, HIS_EMPRESA, HIS_FILIAL, HIS_USUARIO, HIS_DTEXEC, HIS_BANCO, HIS_SQL, HIS_TIPO, HIS_ROWS, HIS_TEMPO, HIS_STATUS, HIS_ERRO, HIS_DELETED) VALUES ("
+  cSql += "'" + oHistoryRecord:Get("id") + "', "
+  cSql += "'" + PadR(oHistoryRecord:Get("empresa"), 2) + "', "
+  cSql += "'" + PadR(oHistoryRecord:Get("filial"), 2) + "', "
+  cSql += "'" + PadR(oHistoryRecord:Get("usuario"), 20) + "', "
+  cSql += "GETDATE(), "
+  cSql += "'" + PadR(oHistoryRecord:Get("banco"), 20) + "', "
+  cSql += "'" + EscapeSql(oHistoryRecord:Get("sql")) + "', "
+  cSql += "'" + PadR(oHistoryRecord:Get("tipo"), 10) + "', "
+  cSql += Str(oHistoryRecord:Get("rows"), 10) + ", "
+  cSql += Str(oHistoryRecord:Get("tempo"), 10) + ", "
+  cSql += "'" + oHistoryRecord:Get("status") + "', "
+  cSql += IIf(Empty(oHistoryRecord:Get("erro")), "NULL", "'" + EscapeSql(oHistoryRecord:Get("erro")) + "'") + ", "
+  cSql += "' ')"
+  
+  If TcSqlExec(cSql) >= 0
+    TcSqlCommit()
+    lRet := .T.
+  EndIf
+  
+  Return lRet
+
+/*============================================================================*
+  Metodo: GetHistory
+  Descricao: Lista historico paginado por usuario
+  
+  Parametros:
+    cUser    - Codigo do usuario
+    nPage    - Numero da pagina
+    nPageSize - Tamanho da pagina (registros por pagina)
+    
+  Retorno:
+    Array - Array de objetos com os registros do historico
+    
+  Estrutura dos objetos retornados:
+    - id       (Character): UUID do registro
+    - empresa  (Character): Codigo da empresa
+    - filial   (Character): Codigo da filial
+    - usuario  (Character): Codigo do usuario
+    - data     (Date):      Data/Hora da execucao
+    - banco    (Character): Nome do banco executado
+    - sql      (Character): Query executada (truncada)
+    - tipo     (Character): Tipo da operacao
+    - rows     (Numeric):   Numero de linhas afetadas
+    - tempo    (Numeric):   Tempo de execucao em ms
+    - status   (Character): Status (S=Sucesso, E=Erro)
+    - erro     (Character): Mensagem de erro
+    
+  Exemplos:
+    aHistory := HistoryService():GetHistory(cUsername, 1, 20)
+ *============================================================================*/
+Method GetHistory(cUser As Character, nPage As Numeric, nPageSize As Numeric) As Array
+  Local aHistory  As Array := {}
+  Local cTable    As Character := ""
+  Local cQuery    As Character := ""
+  Local cAlias    As Character := "HISTORY"
+  Local nStart    As Numeric := 0
+  Local nEnd      As Numeric := 0
+  
+  Default cUser     := ""
+  Default nPage     := 1
+  Default nPageSize := 20
+  
+  If nPage < 1
+    nPage := 1
+  EndIf
+  
+  If nPageSize < 1 .Or. nPageSize > 100
+    nPageSize := 20
+  EndIf
+  
+  cTable := RetSqlName("PQHIST")
+  
+  nStart := (nPage - 1) * nPageSize + 1
+  nEnd   := nPage * nPageSize
+  
+  cQuery := "SELECT HIS_ID, HIS_EMPRESA, HIS_FILIAL, HIS_USUARIO, HIS_DTEXEC, HIS_BANCO, HIS_SQL, HIS_TIPO, HIS_ROWS, HIS_TEMPO, HIS_STATUS, HIS_ERRO "
+  cQuery += "FROM (SELECT ROW_NUMBER() OVER (ORDER BY HIS_DTEXEC DESC) AS ROW_NUM, HIS_ID, HIS_EMPRESA, HIS_FILIAL, HIS_USUARIO, HIS_DTEXEC, HIS_BANCO, HIS_SQL, HIS_TIPO, HIS_ROWS, HIS_TEMPO, HIS_STATUS, HIS_ERRO "
+  cQuery += "FROM " + cTable + " "
+  cQuery += "WHERE HIS_USUARIO = '" + PadR(cUser, 20) + "' "
+  cQuery += "AND HIS_DELETED = ' ') AS T "
+  cQuery += "WHERE ROW_NUM >= " + Str(nStart, 10) + " "
+  cQuery += "AND ROW_NUM <= " + Str(nEnd, 10)
+  
+  dbUseArea(.T., , cQuery, cAlias, .F., .F.)
+  
+  If (cAlias)->(Eof()) .And. (cAlias)->(Bof())
+    (cAlias)->(DbCloseArea())
+    Return aHistory
+  EndIf
+  
+  (cAlias)->(DbGoTop())
+  
+  While !(cAlias)->(Eof())
+    Local oHist As Object := JsonObject():New()
+    
+    oHist:Set("id",       (cAlias)->HIS_ID)
+    oHist:Set("empresa",  (cAlias)->HIS_EMPRESA)
+    oHist:Set("filial",   (cAlias)->HIS_FILIAL)
+    oHist:Set("usuario",  AllTrim((cAlias)->HIS_USUARIO))
+    oHist:Set("data",     (cAlias)->HIS_DTEXEC)
+    oHist:Set("banco",    AllTrim((cAlias)->HIS_BANCO))
+    oHist:Set("sql",      (cAlias)->HIS_SQL)
+    oHist:Set("tipo",     AllTrim((cAlias)->HIS_TIPO))
+    oHist:Set("rows",     (cAlias)->HIS_ROWS)
+    oHist:Set("tempo",    (cAlias)->HIS_TEMPO)
+    oHist:Set("status",   (cAlias)->HIS_STATUS)
+    oHist:Set("erro",     IIf(NullVal((cAlias)->HIS_ERRO), "", (cAlias)->HIS_ERRO))
+    
+    AAdd(aHistory, oHist)
+    
+    (cAlias)->(DbSkip())
+  EndDo
+  
+  (cAlias)->(DbCloseArea())
+  
+  Return aHistory
+
+/*============================================================================*
+  Metodo: GetHistoryById
+  Descricao: Busca registro de historico por ID
+  
+  Parametros:
+    cId - UUID do registro
+    
+  Retorno:
+    Object - Objeto com os dados do historico ou objeto vazio se nao encontrado
+    
+  Estrutura do objeto retornado:
+    - id       (Character): UUID do registro
+    - empresa  (Character): Codigo da empresa
+    - filial   (Character): Codigo da filial
+    - usuario  (Character): Codigo do usuario
+    - data     (Date):      Data/Hora da execucao
+    - banco    (Character): Nome do banco executado
+    - sql      (Character): Query executada
+    - tipo     (Character): Tipo da operacao
+    - rows     (Numeric):   Numero de linhas afetadas
+    - tempo    (Numeric):   Tempo de execucao em ms
+    - status   (Character): Status (S=Sucesso, E=Erro)
+    - erro     (Character): Mensagem de erro
+    
+  Exemplos:
+    oHist := HistoryService():GetHistoryById(cId)
+ *============================================================================*/
+Method GetHistoryById(cId As Character) As Object
+  Local oRet     As Object := JsonObject():New()
+  Local cTable   As Character := ""
+  Local cQuery   As Character := ""
+  Local cAlias   As Character := "HISTBYID"
+  
+  Default cId := ""
+  
+  If Empty(cId)
+    Return oRet
+  EndIf
+  
+  cTable := RetSqlName("PQHIST")
+  
+  cQuery := "SELECT HIS_ID, HIS_EMPRESA, HIS_FILIAL, HIS_USUARIO, HIS_DTEXEC, HIS_BANCO, HIS_SQL, HIS_TIPO, HIS_ROWS, HIS_TEMPO, HIS_STATUS, HIS_ERRO "
+  cQuery += "FROM " + cTable + " "
+  cQuery += "WHERE HIS_ID = '" + cId + "' "
+  cQuery += "AND HIS_DELETED = ' '"
+  
+  dbUseArea(.T., , cQuery, cAlias, .F., .F.)
+  
+  If (cAlias)->(Eof()) .And. (cAlias)->(Bof())
+    (cAlias)->(DbCloseArea())
+    Return oRet
+  EndIf
+  
+  oRet:Set("id",       (cAlias)->HIS_ID)
+  oRet:Set("empresa",  (cAlias)->HIS_EMPRESA)
+  oRet:Set("filial",   (cAlias)->HIS_FILIAL)
+  oRet:Set("usuario",  AllTrim((cAlias)->HIS_USUARIO))
+  oRet:Set("data",     (cAlias)->HIS_DTEXEC)
+  oRet:Set("banco",    AllTrim((cAlias)->HIS_BANCO))
+  oRet:Set("sql",      (cAlias)->HIS_SQL)
+  oRet:Set("tipo",     AllTrim((cAlias)->HIS_TIPO))
+  oRet:Set("rows",     (cAlias)->HIS_ROWS)
+  oRet:Set("tempo",    (cAlias)->HIS_TEMPO)
+  oRet:Set("status",   (cAlias)->HIS_STATUS)
+  oRet:Set("erro",     IIf(NullVal((cAlias)->HIS_ERRO), "", (cAlias)->HIS_ERRO))
+  
+  (cAlias)->(DbCloseArea())
+  
+  Return oRet
+
+/*============================================================================*
+  Metodo: SoftDelete
+  Descricao: Realiza exclusao logica de registro de historico
+  
+  Parametros:
+    cId - UUID do registro
+    
+  Retorno:
+    Logical - .T. se sucesso, .F. se erro
+    
+  Exemplos:
+    lOk := HistoryService():SoftDelete(cId)
+ *============================================================================*/
+Method SoftDelete(cId As Character) As Logical
+  Local lRet     As Logical := .F.
+  Local cSql     As Character := ""
+  Local cTable   As Character := ""
+  
+  Default cId := ""
+  
+  If Empty(cId)
+    Return lRet
+  EndIf
+  
+  cTable := RetSqlName("PQHIST")
+  
+  cSql := "UPDATE " + cTable + " SET HIS_DELETED = '*' WHERE HIS_ID = '" + cId + "'"
+  
+  If TcSqlExec(cSql) >= 0
+    TcSqlCommit()
+    lRet := .T.
+  EndIf
+  
+  Return lRet
+
+/*============================================================================*
+  Funcao: EscapeSql
+  Descricao: Escapa caracteres especiais para evitar SQL injection
+  
+  Parametros:
+    cValue - String a ser escapada
+    
+  Retorno:
+    Character - String escapada
+ *============================================================================*/
+Static Function EscapeSql(cValue As Character) As Character
+  Local cRet As Character := ""
+  
+  Default cValue := ""
+  
+  cRet := StrTran(cValue, "'", "''")
+  cRet := StrTran(cRet, CHAR(13), " ")
+  cRet := StrTran(cRet, CHAR(10), " ")
+  
+  Return cRet
+
+Class HistoryService
+  Method InsertHistory(oHistoryRecord)
+  Method GetHistory(cUser, nPage, nPageSize)
+  Method GetHistoryById(cId)
+  Method SoftDelete(cId)
+EndClass

@@ -1,0 +1,232 @@
+/*----------------------------------------------------------------------------*
+  QueryService.tlpp
+  Servico para execucao de queries SQL no banco de dados
+  
+  Funcionalidades:
+  - Executar consultas SELECT com limite de linhas
+  - Executar comandos DML (INSERT, UPDATE, DELETE)
+  - Suporte a multiplas conexoes (default, oracle, postgres)
+  - Tratamento de erros com TCSqlError()
+  
+  Dependencias:
+  - ConnectionHelper: Gerenciamento de conexoes
+  - SqlDialectHelper: Aplicacao de limite de linhas por banco
+  - ResultSetHelper: Serializacao de resultado
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+#include "tlpp-core.tlpp"
+
+namespace services
+
+/*============================================================================*
+  Funcao: U_QUERY_SERVICE
+  Descricao: Factory para criacao de instancia do servico
+ *============================================================================*/
+Function U_QUERY_SERVICE()
+Return(QueryService():New())
+
+/*============================================================================*
+  Construtor
+ *============================================================================*/
+Method New() Class QueryService
+Return(Self)
+
+/*============================================================================*
+  Metodo: ExecuteSelect
+  Descricao: Executa query SELECT no banco de dados
+  
+  Parametros:
+    cSql      - Query SQL a ser executada
+    cDatabase - Banco de dados ("default", "oracle", "postgres")
+    nMaxRows  - Numero maximo de linhas a retornar
+    nTimeout  - Timeout em segundos
+  
+  Retorno:
+    Object - Objeto QueryResult com colunas, linhas e metadados
+  
+  Exemplos:
+    oResult := QueryService():ExecuteSelect("SELECT * FROM SA1", "default", 1000, 30)
+ *============================================================================*/
+Method ExecuteSelect(cSql As Character, cDatabase As Character,;
+                    nMaxRows As Integer, nTimeout As Integer) As Object
+  Local cAlias      As Character := ""
+  Local cWrkAlias   As Character
+  Local oResult     As Object     := QueryResult():New()
+  Local nStart      As Numeric    := Seconds()
+  Local lExternal   As Logical    := .F.
+  Local oConnHelper As Object
+  Local cFinalSql   As Character
+  Local cErrorMsg   As Character
+  
+  Default cSql     := ""
+  Default cDatabase := ""
+  Default nMaxRows := 1000
+  Default nTimeout := 30
+  
+  If Empty(cSql)
+    oResult:SetError("SQL nao fornecido")
+    Return oResult
+  EndIf
+  
+  lExternal := !Empty(cDatabase) .And. Lower(AllTrim(cDatabase)) != "default"
+  
+  If lExternal
+    oConnHelper := ConnectionHelper():New()
+    cAlias := oConnHelper:Connect(cDatabase)
+  EndIf
+  
+  Try
+    cFinalSql := SqlDialectHelper():ApplyRowLimit(cSql, nMaxRows, cDatabase)
+    
+    cFinalSql := TCGenQry(cFinalSql)
+    
+    cWrkAlias := GetNextAlias()
+    TCSqlOpen(cFinalSql, cWrkAlias, .T., nTimeout)
+    
+    oResult:executionId    := SubStr(CriaGUID(), 2, 36)
+    oResult:columns       := ResultSetHelper():GetColumns(cWrkAlias)
+    oResult:rows           := ResultSetHelper():GetRows(cWrkAlias, nMaxRows)
+    oResult:rowCount       := Len(oResult:rows)
+    oResult:executionTimeMs := (Seconds() - nStart) * 1000
+    oResult:queryType      := "SELECT"
+    oResult:success        := .T.
+    
+    If Select(cWrkAlias) > 0
+      (cWrkAlias)->(DbCloseArea())
+    EndIf
+    
+  Catch oError
+    oResult:success   := .F.
+    cErrorMsg := TCSqlError()
+    If Empty(cErrorMsg)
+      cErrorMsg := oError:Description
+    EndIf
+    oResult:SetError(cErrorMsg)
+    
+    LogError("QueryService", "ExecuteSelect falhou: " + cErrorMsg)
+    
+  Finally
+    If lExternal .And. oConnHelper != Nil
+      oConnHelper:Disconnect(cAlias)
+    EndIf
+  EndTry
+  
+  Return oResult
+
+/*============================================================================*
+  Metodo: ExecuteDml
+  Descricao: Executa comando DML (INSERT, UPDATE, DELETE) no banco de dados
+  
+  Parametros:
+    cSql      - Comando DML a ser executado
+    cDatabase - Banco de dados ("default", "oracle", "postgres")
+  
+  Retorno:
+    Object - Objeto com success e rowsAffected
+  
+  Exemplos:
+    oResult := QueryService():ExecuteDml("UPDATE SA1 SET A1_NOME = 'TESTE' WHERE A1_COD = '000001'", "default")
+ *============================================================================*/
+Method ExecuteDml(cSql As Character, cDatabase As Character) As Object
+  Local cAlias      As Character := ""
+  Local oResult     As Object     := JsonObject():New()
+  Local lExternal   As Logical    := .F.
+  Local oConnHelper As Object
+  Local cErrorMsg   As Character
+  Local nRowsAff    As Numeric    := 0
+  
+  Default cSql     := ""
+  Default cDatabase := ""
+  
+  If Empty(cSql)
+    oResult["success"]      := .F.
+    oResult["error"]         := "SQL nao fornecido"
+    oResult["rowsAffected"]  := 0
+    Return oResult
+  EndIf
+  
+  lExternal := !Empty(cDatabase) .And. Lower(AllTrim(cDatabase)) != "default"
+  
+  If lExternal
+    oConnHelper := ConnectionHelper():New()
+    cAlias := oConnHelper:Connect(cDatabase)
+  EndIf
+  
+  Try
+    If TCSqlExec(cSql)
+      nRowsAff := TCSqlAffected()
+      oResult["success"]      := .T.
+      oResult["rowsAffected"] := nRowsAff
+      oResult["queryType"]    := "DML"
+      
+      LogInfo("QueryService", "DML executado com sucesso. Linhas afetadas: " + cValToChar(nRowsAff))
+    Else
+      cErrorMsg := TCSqlError()
+      oResult["success"]      := .F.
+      oResult["error"]        := cErrorMsg
+      oResult["rowsAffected"] := 0
+      oResult["queryType"]    := "DML"
+      
+      LogError("QueryService", "TCSqlExec retornou false: " + cErrorMsg)
+    EndIf
+    
+  Catch oError
+    oResult["success"]      := .F.
+    cErrorMsg := TCSqlError()
+    If Empty(cErrorMsg)
+      cErrorMsg := oError:Description
+    EndIf
+    oResult["error"]        := cErrorMsg
+    oResult["rowsAffected"] := 0
+    oResult["queryType"]    := "DML"
+    
+    LogError("QueryService", "ExecuteDml falhou: " + cErrorMsg)
+    
+  Finally
+    If lExternal .And. oConnHelper != Nil
+      oConnHelper:Disconnect(cAlias)
+    EndIf
+  EndTry
+  
+  Return oResult
+
+/*============================================================================*
+  Metodo: Execute
+  Descricao: Executa query automaticamente detectando o tipo
+  
+  Parametros:
+    cSql      - Query SQL a ser executada
+    cDatabase - Banco de dados
+    nMaxRows  - Numero maximo de linhas (para SELECT)
+    nTimeout  - Timeout em segundos
+  
+  Retorno:
+    Object - Resultado da execucao
+ *============================================================================*/
+Method Execute(cSql As Character, cDatabase As Character,;
+              nMaxRows As Integer, nTimeout As Integer) As Object
+  Local cUpperSql As Character
+  
+  Default cSql     := ""
+  Default cDatabase := ""
+  Default nMaxRows := 1000
+  Default nTimeout := 30
+  
+  If Empty(cSql)
+    UserException("SQL nao fornecido para execucao")
+  EndIf
+  
+  cUpperSql := Upper(AllTrim(cSql))
+  
+  If cUpperSql Begins "SELECT" .Or. cUpperSql Begins "WITH" .Or. ;
+     cUpperSql Begins "SHOW"   .Or. cUpperSql Begins "DESCRIBE" .Or. ;
+     cUpperSql Begins "EXPLAIN"
+    Return Self:ExecuteSelect(cSql, cDatabase, nMaxRows, nTimeout)
+  Else
+    Return Self:ExecuteDml(cSql, cDatabase)
+  EndIf
+
+EndClass
+
+namespace end

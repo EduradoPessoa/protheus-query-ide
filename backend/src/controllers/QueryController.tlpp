@@ -1,0 +1,376 @@
+/*----------------------------------------------------------------------------*
+  QueryController.tlpp
+  Controller REST para execucao de queries SQL
+  
+  Endpoint: POST /api/pqide/v1/query/execute
+  
+  Funcionalidades:
+  - Validacao de input (sql, database, company, branch, maxRows, timeout)
+  - Execucao de queries via QueryService
+  - Deteccao de tipo de query (SELECT/DML/DDL)
+  - Verificacao de permissao por tipo de query
+  - Retorno formatado em JSON
+  - Tratamento centralizado de erros
+  
+  Dependencias:
+  - QueryService: Execucao de SQL
+  - QueryRequest: Validacao de input
+  - AuthMiddleware: Verificacao de permissao
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+#include "tlpp-core.tlpp"
+
+#define METHOD_POST   "POST"
+#define METHOD_GET    "GET"
+#define METHOD_PUT    "PUT"
+#define METHOD_DELETE "DELETE"
+
+#define STATUS_200 200
+#define STATUS_201 201
+#define STATUS_400 400
+#define STATUS_401 401
+#define STATUS_403 403
+#define STATUS_422 422
+#define STATUS_500 500
+
+#define ERR_INVALID_INPUT    "INVALID_INPUT"
+#define ERR_UNAUTHORIZED     "UNAUTHORIZED"
+#define ERR_FORBIDDEN        "FORBIDDEN"
+#define ERR_QUERY_TYPE       "INVALID_QUERY_TYPE"
+#define ERR_SQL_EMPTY        "SQL_EMPTY"
+#define ERR_DB_INVALID       "DATABASE_INVALID"
+#define ERR_EXECUTION_FAILED "QUERY_EXECUTION_FAILED"
+
+Static cEndpoint := "/api/pqide/v1/query"
+
+/*============================================================================*
+  Funcao: U_QUERY_CONTROLLER
+  Descricao: Factory para criacao de instancia do controller
+ *============================================================================*/
+Function U_QUERY_CONTROLLER()
+Return(QueryController():New())
+
+/*============================================================================*
+  Construtor
+ *============================================================================*/
+Method New() Class QueryController
+Return(Self)
+
+/*============================================================================*
+  Metodo: OnRequest
+  Descricao: Hook chamado pelo framework REST para processar requisicoes
+ *============================================================================*/
+Method OnRequest(cMethod As Character) As Logical
+  Local cRoute As Character := Upper(FwRest():GetUri())
+  
+  Do Case
+    Case cMethod == METHOD_POST .And. "execute" $ cRoute
+      Return Self:ExecuteQuery()
+    
+    Otherwise
+      Return .F.
+  EndCase
+  
+Return .F.
+
+/*============================================================================*
+  Metodo: ExecuteQuery
+  Descricao: Executa query SQL recebida via POST
+  
+  Request Body:
+    {
+      "sql": "SELECT * FROM SA1010",
+      "database": "default",
+      "company": "01",
+      "branch": "01",
+      "maxRows": 1000,
+      "timeout": 30
+    }
+  
+  Response 200 - SELECT:
+    {
+      "executionId": "uuid",
+      "columns": [{"name": "A1_COD", "type": "C", "size": 6, "dec": 0}],
+      "rows": [["000001", "CLIENTE A"]],
+      "rowCount": 1,
+      "executionTimeMs": 187,
+      "queryType": "SELECT",
+      "success": true
+    }
+  
+  Response 200 - DML:
+    {
+      "executionId": "uuid",
+      "rowsAffected": 3,
+      "queryType": "DML",
+      "success": true
+    }
+  
+  Response 400/422 - Erro:
+    {
+      "error": {
+        "code": "ERR_CODE",
+        "message": "Mensagem de erro"
+      }
+    }
+ *============================================================================*/
+Method ExecuteQuery() As Logical
+  Local cBody     As Character := ""
+  Local oRequest  As Object    := Nil
+  Local oResult   As Object    := Nil
+  Local cSql       As Character := ""
+  Local cDatabase As Character := ""
+  Local nMaxRows  As Numeric    := 1000
+  Local nTimeout  As Numeric    := 30
+  Local cQueryType As Character := ""
+  Local lAuthorized As Logical
+  
+  cBody := FwRest():GetBody()
+  
+  If Empty(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Request body vazio ou invalido")
+  EndIf
+  
+  oRequest := JsonObject():New()
+  
+  If !oRequest:FromJson(cBody)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "JSON invalido no request body")
+  EndIf
+  
+  cSql      := oRequest:GetValue("sql", "")
+  cDatabase := oRequest:GetValue("database", "default")
+  nMaxRows  := oRequest:GetValue("maxRows", 1000)
+  nTimeout  := oRequest:GetValue("timeout", 30)
+  
+  If Empty(cSql)
+    Return Self:SendError(STATUS_400, ERR_SQL_EMPTY, "SQL nao fornecido")
+  EndIf
+  
+  If !Self:IsValidDatabase(cDatabase)
+    Return Self:SendError(STATUS_422, ERR_DB_INVALID, "Banco invalido: " + cDatabase)
+  EndIf
+  
+  cQueryType := Self:DetectQueryType(cSql)
+  
+  lAuthorized := Self:CheckPermission(cQueryType)
+  
+  If !lAuthorized
+    Return Self:SendError(STATUS_403, ERR_FORBIDDEN, ;
+              "Usuario sem permissao para executar queries do tipo: " + cQueryType)
+  EndIf
+  
+  oResult := QueryService():Execute(cSql, cDatabase, nMaxRows, nTimeout)
+  
+  If oResult:success
+    Return Self:SendSuccess(oResult)
+  Else
+    Return Self:SendError(STATUS_422, ERR_EXECUTION_FAILED, ;
+              IfEmpty(oResult:error, "Erro desconhecido na execucao da query"))
+  EndIf
+
+/*============================================================================*
+  Metodo: DetectQueryType
+  Descricao: Detecta o tipo de query (SELECT, DML, DDL)
+  
+  Parametros:
+    cSql - Query SQL a ser analisada
+  
+  Retorno:
+    Character - Tipo da query ("SELECT", "DML", "DDL")
+ *============================================================================*/
+Method DetectQueryType(cSql As Character) As Character
+  Local cUpperSql As Character := Upper(AllTrim(cSql))
+  
+  If cUpperSql Begins "SELECT" .Or. ;
+     cUpperSql Begins "WITH"    .Or. ;
+     cUpperSql Begins "SHOW"    .Or. ;
+     cUpperSql Begins "DESCRIBE" .Or. ;
+     cUpperSql Begins "EXPLAIN"
+    Return "SELECT"
+  EndIf
+  
+  If cUpperSql Begins "CREATE"  .Or. ;
+     cUpperSql Begins "ALTER"   .Or. ;
+     cUpperSql Begins "DROP"    .Or. ;
+     cUpperSql Begins "TRUNCATE" .Or. ;
+     cUpperSql Begins "GRANT"   .Or. ;
+     cUpperSql Begins "REVOKE"
+    Return "DDL"
+  EndIf
+  
+  Return "DML"
+
+/*============================================================================*
+  Metodo: CheckPermission
+  Descricao: Verifica se o usuario tem permissao para executar o tipo de query
+  
+  Parametros:
+    cQueryType - Tipo de query ("SELECT", "DML", "DDL")
+  
+  Retorno:
+    Logical - .T. se permitido, .F. se negado
+ *============================================================================*/
+Method CheckPermission(cQueryType As Character) As Logical
+  Local cUserRole As Character := ""
+  
+  cUserRole := GetUserRole()
+  
+  Do Case
+    Case cQueryType == "SELECT"
+      Return (cUserRole $ "ADMIN,QUERY_EXEC")
+    
+    Case cQueryType == "DML"
+      Return (cUserRole $ "ADMIN,DML_EXEC")
+    
+    Case cQueryType == "DDL"
+      Return (cUserRole == "ADMIN")
+    
+    Otherwise
+      Return .F.
+  EndCase
+
+/*============================================================================*
+  Metodo: IsValidDatabase
+  Descricao: Valida se o banco de dados informado e suportado
+  
+  Parametros:
+    cDatabase - Nome do banco ("default", "oracle", "postgres")
+  
+  Retorno:
+    Logical - .T. se valido
+ *============================================================================*/
+Method IsValidDatabase(cDatabase As Character) As Logical
+  Local aValidDatabases As Array := {;
+    "default",;
+    "oracle",;
+    "postgres";
+  }
+  
+  Default cDatabase := "default"
+  
+  Return (AScan(aValidDatabases, {|x| Lower(AllTrim(x)) == Lower(AllTrim(cDatabase))}) > 0)
+
+/============================================================================*
+  Metodo: SendSuccess
+  Descricao: Envia resposta de sucesso
+  
+  Parametros:
+    oResult - Objeto com resultado da execucao
+  
+  Retorno:
+    Logical - .T. (sempre)
+ *============================================================================*/
+Method SendSuccess(oResult As Object) As Logical
+  Local cJson As Character := ""
+  Local oResp As Object := JsonObject():New()
+  
+  oResp["executionId"]     := oResult:executionId
+  oResp["queryType"]        := oResult:queryType
+  oResp["success"]          := oResult:success
+  
+  If oResult:queryType == "SELECT"
+    oResp["columns"]        := oResult:columns
+    oResp["rows"]           := oResult:rows
+    oResp["rowCount"]       := oResult:rowCount
+    oResp["executionTimeMs"] := oResult:executionTimeMs
+  Else
+    oResp["rowsAffected"]  := oResult:rowsAffected
+  EndIf
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/*============================================================================*
+  Metodo: SendError
+  Descricao: Envia resposta de erro
+  
+  Parametros:
+    nStatus  - Codigo HTTP de erro
+    cCode    - Codigo de erro interno
+    cMessage - Mensagem de erro
+  
+  Retorno:
+    Logical - .F. (sempre)
+ *============================================================================*/
+Method SendError(nStatus As Numeric, cCode As Character,;
+                 cMessage As Character) As Logical
+  Local cJson As Character := ""
+  Local oError As Object := JsonObject():New()
+  Local oResp As Object := JsonObject():New()
+  
+  oError["code"]    := cCode
+  oError["message"] := cMessage
+  
+  oResp["error"] := oError
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(nStatus)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oError:Destroy()
+  oResp:Destroy()
+  
+Return .F.
+
+/============================================================================*
+  Funcao: GetUserRole
+  Descricao: Obtem a role do usuario logado
+  
+  Retorno:
+    Character - Role do usuario ("ADMIN", "QUERY_EXEC", "DML_EXEC", "READONLY")
+ *============================================================================*/
+Static Function GetUserRole() As Character
+  Local cUser As Character := ""
+  Local cRole As Character := "READONLY"
+  
+  cUser := HttpSession():GetValue("CUSERNAME")
+  
+  If Empty(cUser)
+    Return cRole
+  EndIf
+  
+  cRole := HttpSession():GetValue("CUSERROLE")
+  
+  If Empty(cRole)
+    cRole := "QUERY_EXEC"
+  EndIf
+  
+Return cRole
+
+/*============================================================================*
+  Funcao: IfEmpty
+  Descricao: Retorna valor padrao se a string for vazia
+  
+  Parametros:
+    cValue    - Valor a testar
+    cDefault  - Valor padrao
+  
+  Retorno:
+    Character - Valor original ou padrao
+ *============================================================================*/
+Static Function IfEmpty(cValue As Character, cDefault As Character) As Character
+  If Empty(cValue)
+    Return cDefault
+  EndIf
+Return cValue
+
+Class QueryController
+  Method New()
+  Method OnRequest(cMethod)
+  Method ExecuteQuery()
+  Method DetectQueryType(cSql)
+  Method CheckPermission(cQueryType)
+  Method IsValidDatabase(cDatabase)
+  Method SendSuccess(oResult)
+  Method SendError(nStatus, cCode, cMessage)
+EndClass

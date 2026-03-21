@@ -1,0 +1,394 @@
+/*----------------------------------------------------------------------------*
+  HistoryController.tlpp
+  Controller REST para manipulacao de historico de queries
+  
+  Endpoints:
+  - GET    /api/pqide/v1/history     - Lista historico paginado
+  - GET    /api/pqide/v1/history/:id - Detalhes de um registro
+  - DELETE /api/pqide/v1/history/:id - Soft-delete
+  
+  Funcionalidades:
+  - Listagem paginada de historico por usuario
+  - Visualizacao de detalhes de um registro
+  - Exclusao logica de registros
+  
+  Dependencias:
+  - HistoryService: Servico de manipulacao de historico
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+#include "tlpp-core.tlpp"
+
+#define METHOD_GET    "GET"
+#define METHOD_DELETE "DELETE"
+
+#define STATUS_200 200
+#define STATUS_400 400
+#define STATUS_404 404
+#define STATUS_500 500
+
+#define ERR_INVALID_INPUT "INVALID_INPUT"
+#define ERR_NOT_FOUND      "NOT_FOUND"
+
+Static cEndpoint := "/api/pqide/v1/history"
+
+/*============================================================================*
+  Funcao: U_HISTORY_CONTROLLER
+  Descricao: Factory para criacao de instancia do controller
+ *============================================================================*/
+Function U_HISTORY_CONTROLLER()
+Return(HistoryController():New())
+
+/============================================================================*
+  Construtor
+ *============================================================================*/
+Method New() Class HistoryController
+Return(Self)
+
+/============================================================================*
+  Metodo: OnRequest
+  Descricao: Hook chamado pelo framework REST para processar requisicoes
+ *============================================================================*/
+Method OnRequest(cMethod As Character) As Logical
+  Local cRoute   As Character := Upper(FwRest():GetUri())
+  Local cId      As Character := ""
+  Local nPosId   As Numeric := 0
+  
+  nPosId := At("/:", cRoute)
+  
+  If nPosId > 0
+    cId := SubStr(cRoute, nPosId + 2)
+  EndIf
+  
+  Do Case
+    Case cMethod == METHOD_GET .And. Empty(cId)
+      Return Self:GetHistoryList()
+    
+    Case cMethod == METHOD_GET .And. !Empty(cId)
+      Return Self:GetHistoryById(cId)
+    
+    Case cMethod == METHOD_DELETE .And. !Empty(cId)
+      Return Self:DeleteHistory(cId)
+    
+    Otherwise
+      Return .F.
+  EndCase
+  
+Return .F.
+
+/============================================================================*
+  Metodo: GetHistoryList
+  Descricao: Lista historico paginado
+  
+  Query Params:
+    page     - Numero da pagina (padrao: 1)
+    pageSize - Tamanho da pagina (padrao: 20, max: 100)
+  
+  Response 200:
+    {
+      "data": [
+        {
+          "id": "uuid",
+          "empresa": "01",
+          "filial": "01",
+          "usuario": "USER001",
+          "data": "2024-01-15 10:30:00",
+          "banco": "default",
+          "sql": "SELECT * FROM SA1010",
+          "tipo": "SELECT",
+          "rows": 10,
+          "tempo": 156,
+          "status": "S",
+          "erro": ""
+        }
+      ],
+      "pagination": {
+        "page": 1,
+        "pageSize": 20,
+        "total": 100
+      }
+    }
+  
+  Response 400 - Erro:
+    {
+      "error": {
+        "code": "ERR_CODE",
+        "message": "Mensagem de erro"
+      }
+    }
+ *============================================================================*/
+Method GetHistoryList() As Logical
+  Local cUser      As Character := ""
+  Local nPage      As Numeric   := 1
+  Local nPageSize  As Numeric   := 20
+  Local aHistory   As Array     := {}
+  Local oResult    As Object     := Nil
+  
+  cUser := GetCurrentUser()
+  
+  If Empty(cUser)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Usuario nao identificado")
+  EndIf
+  
+  nPage     := Val(FwRest():UrlQuery():GetValue("page", "1"))
+  nPageSize := Val(FwRest():UrlQuery():GetValue("pageSize", "20"))
+  
+  oResult := HistoryService():GetHistory(cUser, nPage, nPageSize)
+  
+  If ValType(oResult) == "A"
+    aHistory := oResult
+  Else
+    aHistory := {}
+  EndIf
+  
+  Return Self:SendSuccess(aHistory, nPage, nPageSize)
+
+/============================================================================*
+  Metodo: GetHistoryById
+  Descricao: Busca detalhes de um registro de historico
+  
+  Response 200:
+    {
+      "id": "uuid",
+      "empresa": "01",
+      "filial": "01",
+      "usuario": "USER001",
+      "data": "2024-01-15 10:30:00",
+      "banco": "default",
+      "sql": "SELECT * FROM SA1010 WHERE A1_COD = '000001'",
+      "tipo": "SELECT",
+      "rows": 1,
+      "tempo": 156,
+      "status": "S",
+      "erro": ""
+    }
+  
+  Response 404 - Nao encontrado:
+    {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "Registro de historico nao encontrado"
+      }
+    }
+ *============================================================================*/
+Method GetHistoryById(cId As Character) As Logical
+  Local cUser    As Character := ""
+  Local oHistory As Object     := Nil
+  
+  Default cId := ""
+  
+  If Empty(cId)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "ID nao fornecido")
+  EndIf
+  
+  cUser := GetCurrentUser()
+  
+  If Empty(cUser)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Usuario nao identificado")
+  EndIf
+  
+  oHistory := HistoryService():GetHistoryById(cId)
+  
+  If Empty(oHistory:Get("id"))
+    Return Self:SendError(STATUS_404, ERR_NOT_FOUND, "Registro de historico nao encontrado")
+  EndIf
+  
+  Return Self:SendSuccessDetail(oHistory)
+
+/============================================================================*
+  Metodo: DeleteHistory
+  Descricao: Realiza soft-delete de um registro de historico
+  
+  Response 200:
+    {
+      "success": true,
+      "message": "Registro excluido com sucesso"
+    }
+  
+  Response 404 - Nao encontrado:
+    {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "Registro de historico nao encontrado"
+      }
+    }
+ *============================================================================*/
+Method DeleteHistory(cId As Character) As Logical
+  Local cUser    As Character := ""
+  Local oHistory As Object     := Nil
+  Local lDeleted As Logical    := .F.
+  
+  Default cId := ""
+  
+  If Empty(cId)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "ID nao fornecido")
+  EndIf
+  
+  cUser := GetCurrentUser()
+  
+  If Empty(cUser)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Usuario nao identificado")
+  EndIf
+  
+  oHistory := HistoryService():GetHistoryById(cId)
+  
+  If Empty(oHistory:Get("id"))
+    Return Self:SendError(STATUS_404, ERR_NOT_FOUND, "Registro de historico nao encontrado")
+  EndIf
+  
+  lDeleted := HistoryService():SoftDelete(cId)
+  
+  If lDeleted
+    Return Self:SendDeleteSuccess()
+  Else
+    Return Self:SendError(STATUS_500, ERR_INVALID_INPUT, "Erro ao excluir registro")
+  EndIf
+
+/*============================================================================*
+  Metodo: SendSuccess
+  Descricao: Envia resposta de sucesso para listagem
+  
+  Parametros:
+    aHistory  - Array com registros do historico
+    nPage     - Numero da pagina atual
+    nPageSize - Tamanho da pagina
+ *============================================================================*/
+Method SendSuccess(aHistory As Array, nPage As Numeric, nPageSize As Numeric) As Logical
+  Local cJson    As Character := ""
+  Local oResp    As Object     := JsonObject():New()
+  Local oPagination As Object  := JsonObject():New()
+  
+  oResp["data"] := aHistory
+  
+  oPagination["page"]     := nPage
+  oPagination["pageSize"] := nPageSize
+  oPagination["total"]    := Len(aHistory)
+  
+  oResp["pagination"] := oPagination
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  oPagination:Destroy()
+  
+Return .T.
+
+/============================================================================*
+  Metodo: SendSuccessDetail
+  Descricao: Envia resposta de sucesso para detalhe
+  
+  Parametros:
+    oHistory - Objeto com dados do historico
+ *============================================================================*/
+Method SendSuccessDetail(oHistory As Object) As Logical
+  Local cJson As Character := ""
+  Local oResp As Object := JsonObject():New()
+  
+  oResp["id"]       := oHistory:Get("id")
+  oResp["empresa"]  := oHistory:Get("empresa")
+  oResp["filial"]   := oHistory:Get("filial")
+  oResp["usuario"]  := oHistory:Get("usuario")
+  oResp["data"]     := oHistory:Get("data")
+  oResp["banco"]    := oHistory:Get("banco")
+  oResp["sql"]      := oHistory:Get("sql")
+  oResp["tipo"]     := oHistory:Get("tipo")
+  oResp["rows"]     := oHistory:Get("rows")
+  oResp["tempo"]    := oHistory:Get("tempo")
+  oResp["status"]   := oHistory:Get("status")
+  oResp["erro"]     := oHistory:Get("erro")
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/============================================================================*
+  Metodo: SendDeleteSuccess
+  Descricao: Envia resposta de sucesso para exclusao
+ *============================================================================*/
+Method SendDeleteSuccess() As Logical
+  Local cJson As Character := ""
+  Local oResp As Object := JsonObject():New()
+  
+  oResp["success"] := .T.
+  oResp["message"] := "Registro excluido com sucesso"
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/============================================================================*
+  Metodo: SendError
+  Descricao: Envia resposta de erro
+  
+  Parametros:
+    nStatus  - Codigo HTTP de erro
+    cCode    - Codigo de erro interno
+    cMessage - Mensagem de erro
+ *============================================================================*/
+Method SendError(nStatus As Numeric, cCode As Character,;
+                cMessage As Character) As Logical
+  Local cJson  As Character := ""
+  Local oError As Object    := JsonObject():New()
+  Local oResp  As Object    := JsonObject():New()
+  
+  oError["code"]    := cCode
+  oError["message"] := cMessage
+  
+  oResp["error"] := oError
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(nStatus)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oError:Destroy()
+  oResp:Destroy()
+  
+Return .F.
+
+/============================================================================*
+  Funcao: GetCurrentUser
+  Descricao: Obtem o codigo do usuario logado
+  
+  Retorno:
+    Character - Codigo do usuario
+ *============================================================================*/
+Static Function GetCurrentUser() As Character
+  Local cUser As Character := ""
+  
+  cUser := HttpSession():GetValue("CUSERNAME")
+  
+  If Empty(cUser)
+    cUser := "USER"
+  EndIf
+  
+Return cUser
+
+Class HistoryController
+  Method New()
+  Method OnRequest(cMethod)
+  Method GetHistoryList()
+  Method GetHistoryById(cId)
+  Method DeleteHistory(cId)
+  Method SendSuccess(aHistory, nPage, nPageSize)
+  Method SendSuccessDetail(oHistory)
+  Method SendDeleteSuccess()
+  Method SendError(nStatus, cCode, cMessage)
+EndClass

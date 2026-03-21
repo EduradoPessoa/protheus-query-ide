@@ -1,0 +1,89 @@
+/*----------------------------------------------------------------------------*
+  ValidationHelper.tlpp
+  Helper para validação de entrada SQL e detecção de tipo de query
+
+  Funções:
+  - ValidateSqlInput: Bloqueia SQL perigoso (múltiplos statements, 
+    execução dinâmica, tabelas de sistema)
+  - DetectQueryType: Classifica query como DDL, DML ou SELECT
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+/*============================================================================*
+  Função: ValidateSqlInput
+  Descrição: Valida entrada SQL para bloquear operações perigosas
+  
+  Parâmetros:
+  - cSql : String SQL a ser validada
+  
+  Retorno:
+  - Logical: .T. se válido, .F. se perigoso
+  
+  Validações:
+  - Bloqueia múltiplos statements (ponto e vírgula no meio)
+  - Bloqueia EXEC, EXECUTE, XP_, SP_EXECUTESQL, DBMS_SQL, EXECUTE IMMEDIATE
+  - Bloqueia tabelas de sistema: SYS., INFORMATION_SCHEMA., PG_CATALOG., 
+    PG_TOAST, DBA_, ALL_TABLES, V$
+*============================================================================*/
+Function ValidateSqlInput(cSql As Character) As Logical
+  Local cUpper As Character := Upper(cSql)
+
+  Local nSemiPos As Integer := At(";", RTrim(cSql))
+  If nSemiPos > 0 .And. nSemiPos < Len(RTrim(cSql))
+    Return .F.
+  EndIf
+
+  Local aDangerous As Array
+  aDangerous := {"EXEC ", "EXECUTE ", "XP_", "SP_EXECUTESQL",;
+                 "DBMS_SQL", "EXECUTE IMMEDIATE"}
+  Local i As Integer
+  For i := 1 To Len(aDangerous)
+    If aDangerous[i] InStr cUpper
+      Return .F.
+    EndIf
+  Next i
+
+  Local aSysPrefixes As Array
+  aSysPrefixes := {"SYS.", "INFORMATION_SCHEMA.", "PG_CATALOG.",;
+                   "PG_TOAST", "DBA_", "ALL_TABLES", "V$"}
+  For i := 1 To Len(aSysPrefixes)
+    If aSysPrefixes[i] InStr cUpper
+      Return .F.
+    EndIf
+  Next i
+
+  Return .T.
+EndFunction
+
+/*============================================================================*
+  Função: DetectQueryType
+  Descrição: Detecta o tipo de query SQL (DDL, DML ou SELECT)
+  
+  Parâmetros:
+  - cSql : String SQL a ser analisada
+  
+  Retorno:
+  - Character: "DDL", "DML" ou "SELECT" (sempre uppercase)
+  
+  Classificação:
+  - DDL: CREATE, ALTER, DROP, TRUNCATE, RENAME
+  - DML: INSERT, UPDATE, DELETE, MERGE
+  - SELECT: qualquer outro comando
+*============================================================================*/
+Function DetectQueryType(cSql As Character) As Character
+  Local cUpper As Character := Upper(AllTrim(cSql))
+
+  If cUpper Begins "CREATE"   .Or. cUpper Begins "ALTER"    .Or. ;
+     cUpper Begins "DROP"     .Or. cUpper Begins "TRUNCATE"  .Or. ;
+     cUpper Begins "RENAME"
+    Return "DDL"
+  EndIf
+
+  If cUpper Begins "INSERT"   .Or. cUpper Begins "UPDATE"   .Or. ;
+     cUpper Begins "DELETE"   .Or. cUpper Begins "MERGE"
+    Return "DML"
+  EndIf
+
+  Return "SELECT"
+EndFunction

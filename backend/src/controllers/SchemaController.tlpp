@@ -1,0 +1,315 @@
+/*----------------------------------------------------------------------------*
+  SchemaController.tlpp
+  Controller REST para operacoes de schema do banco de dados
+  
+  Endpoints:
+  - GET /api/pqide/v1/connections - Lista bancos disponiveis
+  - GET /api/pqide/v1/schema/tables - Lista tabelas do banco
+  - GET /api/pqide/v1/schema/columns - Lista colunas de uma tabela
+  
+  Funcionalidades:
+  - Lista conexoes disponiveis (testa MsConnect para cada alias)
+  - Lista tabelas do banco selecionado
+  - Lista colunas de uma tabela especifica
+  - Retorno formatado em JSON
+  - Tratamento centralizado de erros
+  
+  Dependencias:
+  - SchemaService: Operacoes de schema
+  - ConnectionHelper: Teste de conexao
+ *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+#include "tlpp-core.tlpp"
+
+#define METHOD_GET "GET"
+
+#define STATUS_200 200
+#define STATUS_400 400
+#define STATUS_404 404
+#define STATUS_422 422
+
+#define ERR_INVALID_INPUT    "INVALID_INPUT"
+#define ERR_CONNECTION_FAIL  "CONNECTION_FAILED"
+#define ERR_TABLE_NOT_FOUND  "TABLE_NOT_FOUND"
+#define ERR_NO_COLUMNS       "NO_COLUMNS_FOUND"
+
+Static cEndpoint := "/api/pqide/v1"
+
+/*============================================================================*
+  Funcao: U_SCHEMA_CONTROLLER
+  Descricao: Factory para criacao de instancia do controller
+ *============================================================================*/
+Function U_SCHEMA_CONTROLLER()
+Return(SchemaController():New())
+
+/*============================================================================*
+  Construtor
+ *============================================================================*/
+Method New() Class SchemaController
+Return(Self)
+
+/*============================================================================*
+  Metodo: OnRequest
+  Descricao: Hook chamado pelo framework REST para processar requisicoes
+ *============================================================================*/
+Method OnRequest(cMethod As Character) As Logical
+  Local cRoute As Character := Upper(FwRest():GetUri())
+  
+  Do Case
+    Case cMethod == METHOD_GET .And. "connections" $ cRoute
+      Return Self:GetConnections()
+    
+    Case cMethod == METHOD_GET .And. "tables" $ cRoute
+      Return Self:GetTables()
+    
+    Case cMethod == METHOD_GET .And. "columns" $ cRoute
+      Return Self:GetColumns()
+    
+    Otherwise
+      Return .F.
+  EndCase
+  
+Return .F.
+
+/*============================================================================*
+  Metodo: GetConnections
+  Descricao: Lista bancos disponiveis testando MsConnect para cada alias
+  
+  Response 200:
+    {
+      "connections": [
+        {
+          "id": "default",
+          "label": "SQL Server (Protheus)",
+          "available": true
+        },
+        {
+          "id": "oracle",
+          "label": "Oracle",
+          "available": true
+        },
+        {
+          "id": "postgres",
+          "label": "PostgreSQL",
+          "available": false
+        }
+      ]
+    }
+ *============================================================================*/
+Method GetConnections() As Logical
+  Local aConnections As Array := {}
+  Local aAliases      As Array := {;
+    {"default",  "SQL Server (Protheus)", ""},;
+    {"oracle",   "Oracle",                "DB_ORACLE"},;
+    {"postgres", "PostgreSQL",            "DB_POSTGRES"};
+  }
+  Local i          As Integer
+  Local cId        As Character
+  Local cLabel     As Character
+  Local cAlias     As Character
+  Local lAvailable As Logical
+  Local oConn      As Object
+  Local oConnData  As Object
+  
+  For i := 1 To Len(aAliases)
+    cId    := aAliases[i][1]
+    cLabel := aAliases[i][2]
+    cAlias := aAliases[i][3]
+    
+    lAvailable := .T.
+    
+    If cId == "default"
+      lAvailable := .T.
+    Else
+      oConn := ConnectionHelper():New()
+      lAvailable := oConn:TestConnection(cAlias)
+      
+      If lAvailable
+        oConn:Disconnect(cAlias)
+      EndIf
+    EndIf
+    
+    oConnData := JsonObject():New()
+    oConnData["id"]       := cId
+    oConnData["label"]    := cLabel
+    oConnData["available"] := lAvailable
+    
+    AAdd(aConnections, oConnData)
+  Next i
+  
+  Return Self:SendSuccess(aConnections)
+
+/*============================================================================*
+  Metodo: GetTables
+  Descricao: Lista tabelas do banco de dados selecionado
+  
+  Query Params:
+    database - Banco de dados (default, oracle, postgres)
+  
+  Response 200:
+    {
+      "database": "default",
+      "tables": ["SA1", "SA2", "SA3", ...]
+    }
+ *============================================================================*/
+Method GetTables() As Logical
+  Local cDatabase As Character := ""
+  Local aTables   As Array      := {}
+  Local oResult   As Object
+  
+  cDatabase := FwRest():GetParam("database", "default")
+  
+  If !Self:IsValidDatabase(cDatabase)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Banco invalido: " + cDatabase)
+  EndIf
+  
+  aTables := SchemaService():GetTables(cDatabase)
+  
+  oResult := JsonObject():New()
+  oResult["database"] := cDatabase
+  oResult["tables"]   := aTables
+  
+  Return Self:SendSuccess(oResult)
+
+/*============================================================================*
+  Metodo: GetColumns
+  Descricao: Lista colunas de uma tabela
+  
+  Query Params:
+    table   - Nome da tabela (obrigatorio)
+    database - Banco de dados (default, oracle, postgres)
+  
+  Response 200:
+    {
+      "table": "SA1",
+      "database": "default",
+      "columns": [
+        {"name": "A1_COD", "type": "C", "size": 6, "dec": 0},
+        {"name": "A1_NOME", "type": "C", "size": 40, "dec": 0}
+      ]
+    }
+ *============================================================================*/
+Method GetColumns() As Logical
+  Local cTable    As Character := ""
+  Local cDatabase As Character := "default"
+  Local aColumns  As Array      := {}
+  Local oResult   As Object
+  
+  cTable    := FwRest():GetParam("table", "")
+  cDatabase := FwRest():GetParam("database", "default")
+  
+  If Empty(cTable)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Nome da tabela nao fornecido")
+  EndIf
+  
+  If !Self:IsValidDatabase(cDatabase)
+    Return Self:SendError(STATUS_400, ERR_INVALID_INPUT, "Banco invalido: " + cDatabase)
+  EndIf
+  
+  aColumns := SchemaService():GetColumns(cTable, cDatabase)
+  
+  If Len(aColumns) == 0
+    Return Self:SendError(STATUS_404, ERR_TABLE_NOT_FOUND, "Tabela nao encontrada: " + cTable)
+  EndIf
+  
+  oResult := JsonObject():New()
+  oResult["table"]    := cTable
+  oResult["database"] := cDatabase
+  oResult["columns"]   := aColumns
+  
+  Return Self:SendSuccess(oResult)
+
+/*============================================================================*
+  Metodo: IsValidDatabase
+  Descricao: Valida se o banco de dados informado e suportado
+  
+  Parametros:
+    cDatabase - Nome do banco ("default", "oracle", "postgres")
+  
+  Retorno:
+    Logical - .T. se valido
+ *============================================================================*/
+Method IsValidDatabase(cDatabase As Character) As Logical
+  Local aValidDatabases As Array := {;
+    "default",;
+    "oracle",;
+    "postgres";
+  }
+  
+  Default cDatabase := "default"
+  
+  Return (AScan(aValidDatabases, {|x| Lower(AllTrim(x)) == Lower(AllTrim(cDatabase))}) > 0)
+
+/*============================================================================*
+  Metodo: SendSuccess
+  Descricao: Envia resposta de sucesso
+  
+  Parametros:
+    oData - Objeto ou array com dados
+  
+  Retorno:
+    Logical - .T. (sempre)
+ *============================================================================*/
+Method SendSuccess(oData As Object) As Logical
+  Local cJson As Character := ""
+  Local oResp As Object := JsonObject():New()
+  
+  oResp["success"] := .T.
+  oResp["data"]    := oData
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(STATUS_200)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oResp:Destroy()
+  
+Return .T.
+
+/*============================================================================*
+  Metodo: SendError
+  Descricao: Envia resposta de erro
+  
+  Parametros:
+    nStatus  - Codigo HTTP de erro
+    cCode    - Codigo de erro interno
+    cMessage - Mensagem de erro
+  
+  Retorno:
+    Logical - .F. (sempre)
+ *============================================================================*/
+Method SendError(nStatus As Numeric, cCode As Character,;
+                cMessage As Character) As Logical
+  Local cJson As Character := ""
+  Local oError As Object := JsonObject():New()
+  Local oResp As Object := JsonObject():New()
+  
+  oError["code"]    := cCode
+  oError["message"] := cMessage
+  
+  oResp["success"] := .F.
+  oResp["error"]   := oError
+  
+  cJson := oResp:ToJson()
+  
+  FwRest():SetStatus(nStatus)
+  FwRest():SetContentType("application/json")
+  FwRest():SetResponse(cJson)
+  
+  oError:Destroy()
+  oResp:Destroy()
+  
+Return .F.
+
+Class SchemaController
+  Method New()
+  Method OnRequest(cMethod)
+  Method GetConnections()
+  Method GetTables()
+  Method GetColumns()
+  Method IsValidDatabase(cDatabase)
+  Method SendSuccess(oData)
+  Method SendError(nStatus, cCode, cMessage)
+EndClass

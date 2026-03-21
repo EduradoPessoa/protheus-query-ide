@@ -1,0 +1,215 @@
+/*----------------------------------------------------------------------------*
+  AuditMiddleware.tlpp
+  Middleware de auditoria para ProtheusQuery IDE
+
+  Registra todas as operações em PQAUDT (Tabela de Auditoria)
+  Apenas INSERT - sem DELETE/UPDATE via API
+*----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+#define AUDIT_STATUS_INICIADO "INICIADO"
+#define AUDIT_STATUS_SUCESSO  "SUCESSO"
+#define AUDIT_STATUS_ERRO     "ERRO"
+
+/*============================================================================*
+  Classe: AuditMiddleware
+  Descrição: Middleware para registro de auditoria em PQAUDT
+*============================================================================*/
+Class AuditMiddleware
+  Data cUserId
+  Data cCompany
+  Data cIP
+  Data cAction
+  Data cDetail
+  Data cHistId
+  Data cAuditId
+
+  Method New() Constructor
+
+  Method StartAudit(cAction, cDetail)
+  Method EndAudit(cStatus, cDetail)
+  Method WriteAudit(oData)
+  Method GetAuditId()
+  Method SetContext(oRequest)
+EndClass
+
+/*============================================================================*
+  Method: New
+  Descrição: Construtor da classe AuditMiddleware
+*============================================================================*/
+Method New() Class AuditMiddleware
+  ::cUserId   := ""
+  ::cCompany  := ""
+  ::cIP       := ""
+  ::cAction   := ""
+  ::cDetail   := ""
+  ::cHistId   := ""
+  ::cAuditId  := ""
+Return Self
+
+/*============================================================================*
+  Method: SetContext
+  Descrição: Preenche contexto do usuário a partir do request
+  Parameters: oRequest - objeto request com contexto
+*============================================================================*/
+Method SetContext(oRequest) Class AuditMiddleware
+  ::cUserId  := oRequest:GetContextValue("currentUser")
+  ::cCompany := oRequest:GetHeader("X-Protheus-Company")
+  ::cIP      := oRequest:GetIP()
+
+  If Empty(::cCompany)
+    ::cCompany := "00"
+  EndIf
+
+  If Empty(::cUserId)
+    ::cUserId := "ANONYMOUS"
+  EndIf
+
+  If Empty(::cIP)
+    ::cIP := "0.0.0.0"
+  EndIf
+
+  LogInfo("AUDIT", "Contexto de auditoria definido", {"user": ::cUserId, "company": ::cCompany, "ip": ::cIP})
+Return Nil
+
+/*============================================================================*
+  Method: StartAudit
+  Descrição: Inicia registro de auditoria (status = INICIADO)
+  Parameters: cAction - ação realizada, cDetail - detalhes da operação
+*============================================================================*/
+Method StartAudit(cAction, cDetail) Class AuditMiddleware
+  Local oData   := nil
+  Local lResult := .F.
+
+  Default cAction := ""
+  Default cDetail := ""
+
+  ::cAction  := cAction
+  ::cDetail  := cDetail
+  ::cAuditId := GetUuid()
+  ::cHistId  := GetUuid()
+
+  oData := JsonObject():New()
+  oData["AUD_ID"]      := ::cAuditId
+  oData["AUD_HISTID"]  := ::cHistId
+  oData["AUD_EMPRESA"] := ::cCompany
+  oData["AUD_USUARIO"] := ::cUserId
+  oData["AUD_IP"]      := ::cIP
+  oData["AUD_DTLOG"]   := DateTimeToStr(Now())
+  oData["AUD_ACAO"]    := ::cAction
+  oData["AUD_DETALHE"] := ::cDetail + " | Status: " + AUDIT_STATUS_INICIADO
+
+  lResult := ::WriteAudit(oData)
+
+  If !lResult
+    LogError("AUDIT", "Falha ao registrar início de auditoria", {"action": cAction})
+  EndIf
+
+Return lResult
+
+/*============================================================================*
+  Method: EndAudit
+  Descrição: Finaliza registro de auditoria (status = SUCESSO/ERRO)
+  Parameters: cStatus - status final, cDetail - detalhes adicionais
+*============================================================================*/
+Method EndAudit(cStatus, cDetail) Class AuditMiddleware
+  Local oData   := nil
+  Local lResult := .F.
+  Local cDetalhe := ""
+
+  Default cStatus := AUDIT_STATUS_SUCESSO
+  Default cDetail := ""
+
+  cDetalhe := ::cDetail + " | Status: " + cStatus
+
+  If !Empty(cDetail)
+    cDetalhe += " | " + cDetail
+  EndIf
+
+  oData := JsonObject():New()
+  oData["AUD_ID"]      := ::cAuditId
+  oData["AUD_HISTID"]  := ::cHistId
+  oData["AUD_EMPRESA"] := ::cCompany
+  oData["AUD_USUARIO"] := ::cUserId
+  oData["AUD_IP"]      := ::cIP
+  oData["AUD_DTLOG"]   := DateTimeToStr(Now())
+  oData["AUD_ACAO"]    := ::cAction
+  oData["AUD_DETALHE"] := cDetalhe
+
+  lResult := ::WriteAudit(oData)
+
+  If !lResult
+    LogError("AUDIT", "Falha ao registrar final de auditoria", {"action": ::cAction, "status": cStatus})
+  Else
+    LogInfo("AUDIT", "Auditoria registrada com sucesso", {"action": ::cAction, "status": cStatus, "auditId": ::cAuditId})
+  EndIf
+
+Return lResult
+
+/*============================================================================*
+  Method: WriteAudit
+  Descrição: Insere registro na tabela PQAUDT
+  Parameters: oData - objeto com dados da auditoria
+  Returns: .T. se sucesso, .F. se falha
+*============================================================================*/
+Method WriteAudit(oData) Class AuditMiddleware
+  Local cSql     := ""
+  Local aParams  := {}
+  Local lResult  := .F.
+  Local cError   := ""
+
+  If oData == nil
+    LogError("AUDIT", "Dados de auditoria inválidos (nil)")
+    Return .F.
+  EndIf
+
+  cSql := "INSERT INTO PQAUDT " +;
+          "(AUD_ID, AUD_HISTID, AUD_EMPRESA, AUD_USUARIO, AUD_IP, " +;
+          "AUD_DTLOG, AUD_ACAO, AUD_DETALHE) " +;
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+
+  AAdd(aParams, oData["AUD_ID"])
+  AAdd(aParams, oData["AUD_HISTID"])
+  AAdd(aParams, oData["AUD_EMPRESA"])
+  AAdd(aParams, oData["AUD_USUARIO"])
+  AAdd(aParams, oData["AUD_IP"])
+  AAdd(aParams, oData["AUD_DTLOG"])
+  AAdd(aParams, oData["AUD_ACAO"])
+  AAdd(aParams, oData["AUD_DETALHE"])
+
+  lResult := TCSqlExec(cSql, aParams)
+
+  If !lResult
+    cError := TCSqlError()
+    LogError("AUDIT", "Erro ao inserir registro em PQAUDT", {"error": cError, "sql": cSql})
+  EndIf
+
+Return lResult
+
+/*============================================================================*
+  Method: GetAuditId
+  Descrição: Retorna o ID do registro de auditoria atual
+*============================================================================*/
+Method GetAuditId() Class AuditMiddleware
+Return ::cAuditId
+
+/*============================================================================*
+  Função: GetUuid
+  Descrição: Gera UUID único para identificação de auditoria
+*============================================================================*/
+Static Function GetUuid()
+  Local cUuid := ""
+  Local nRand := 0
+  Local i     := 0
+
+  For i := 1 To 32
+    nRand := Randomize(0, 16)
+    If nRand < 10
+      cUuid += Str(nRand, 1)
+    Else
+      cUuid += Chr(55 + nRand)
+    EndIf
+  Next i
+
+Return cUuid

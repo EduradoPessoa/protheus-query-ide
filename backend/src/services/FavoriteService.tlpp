@@ -1,0 +1,344 @@
+/*----------------------------------------------------------------------------*
+  FavoriteService.tlpp
+  Servico para manipulacao de favoritos de queries
+  
+  Funcionalidades:
+  - Inserir novo favorito
+  - Atualizar favorito existente
+  - Listar favoritos por usuario
+  - Buscar favorito por ID
+  - Exclusao logica (soft-delete)
+  *----------------------------------------------------------------------------*/
+
+#include "protheus.ch"
+
+/*============================================================================*
+  Metodo: InsertFavorite
+  Descricao: Insere novo favorito
+  
+  Parametros:
+    oFavoriteRecord - Objeto com os dados do favorito
+    
+  Retorno:
+    Logical - .T. se sucesso, .F. se erro
+    
+  Estrutura do objeto oFavoriteRecord:
+    - id       (Character): UUID do registro
+    - empresa  (Character): Codigo da empresa
+    - filial   (Character): Codigo da filial
+    - usuario  (Character): Codigo do usuario
+    - nome     (Character): Nome do favorito
+    - sql      (Character): Query SQL
+    - banco    (Character): Nome do banco de dados
+    - tipo     (Character): Tipo de query (SELECT, INSERT, UPDATE, DELETE)
+    - descricao (Character): Descricao do favorito (opcional)
+    
+  Exemplos:
+    Local oRecord := JsonObject():New()
+    oRecord:Set("id",         GetUuid())
+    oRecord:Set("empresa",    cEmpAnt)
+    oRecord:Set("filial",     cFilAnt)
+    oRecord:Set("usuario",    cUsername)
+    oRecord:Set("nome",       "Consulta Clientes")
+    oRecord:Set("sql",        cSql)
+    oRecord:Set("banco",      "default")
+    oRecord:Set("tipo",       "SELECT")
+    oRecord:Set("descricao",  "Query para listar clientes ativos")
+    lOk := FavoriteService():InsertFavorite(oRecord)
+ *============================================================================*/
+Method InsertFavorite(oFavoriteRecord As Object) As Logical
+  Local lRet       As Logical := .F.
+  Local cSql       As Character := ""
+  Local cTable     As Character := ""
+  
+  Default oFavoriteRecord := JsonObject():New()
+  
+  If Empty(oFavoriteRecord:Get("id"))
+    Return lRet
+  EndIf
+  
+  cTable := RetSqlName("PQFAVS")
+  
+  cSql := "INSERT INTO " + cTable + " (FAV_ID, FAV_EMPRESA, FAV_FILIAL, FAV_USUARIO, FAV_NOME, FAV_SQL, FAV_BANCO, FAV_TIPO, FAV_DESCRICAO, FAV_DTCAD, FAV_DELETED) VALUES ("
+  cSql += "'" + oFavoriteRecord:Get("id") + "', "
+  cSql += "'" + PadR(oFavoriteRecord:Get("empresa"), 2) + "', "
+  cSql += "'" + PadR(oFavoriteRecord:Get("filial"), 2) + "', "
+  cSql += "'" + PadR(oFavoriteRecord:Get("usuario"), 20) + "', "
+  cSql += "'" + PadR(EscapeSql(oFavoriteRecord:Get("nome")), 100) + "', "
+  cSql += "'" + EscapeSql(oFavoriteRecord:Get("sql")) + "', "
+  cSql += "'" + PadR(oFavoriteRecord:Get("banco"), 20) + "', "
+  cSql += "'" + PadR(oFavoriteRecord:Get("tipo"), 10) + "', "
+  cSql += IIf(Empty(oFavoriteRecord:Get("descricao")), "NULL", "'" + PadR(EscapeSql(oFavoriteRecord:Get("descricao")), 250) + "'") + ", "
+  cSql += "GETDATE(), "
+  cSql += "' ')"
+  
+  If TcSqlExec(cSql) >= 0
+    TcSqlCommit()
+    lRet := .T.
+  EndIf
+  
+  Return lRet
+
+/*============================================================================*
+  Metodo: UpdateFavorite
+  Descricao: Atualiza favorito existente
+  
+  Parametros:
+    cId           - UUID do registro
+    oFavoriteRecord - Objeto com os dados atualizados
+    
+  Retorno:
+    Logical - .T. se sucesso, .F. se erro
+    
+  Estrutura do objeto oFavoriteRecord:
+    - nome     (Character): Nome do favorito
+    - sql      (Character): Query SQL
+    - banco    (Character): Nome do banco de dados
+    - tipo     (Character): Tipo de query
+    - descricao (Character): Descricao do favorito
+    
+  Exemplos:
+    Local oRecord := JsonObject():New()
+    oRecord:Set("nome",       "Consulta Clientes Atualizada")
+    oRecord:Set("sql",        cNewSql)
+    oRecord:Set("banco",      "default")
+    oRecord:Set("tipo",       "SELECT")
+    oRecord:Set("descricao",  "Nova descricao")
+    lOk := FavoriteService():UpdateFavorite(cId, oRecord)
+ *============================================================================*/
+Method UpdateFavorite(cId As Character, oFavoriteRecord As Object) As Logical
+  Local lRet       As Logical := .F.
+  Local cSql       As Character := ""
+  Local cTable     As Character := ""
+  
+  Default cId            := ""
+  Default oFavoriteRecord := JsonObject():New()
+  
+  If Empty(cId)
+    Return lRet
+  EndIf
+  
+  cTable := RetSqlName("PQFAVS")
+  
+  cSql := "UPDATE " + cTable + " SET "
+  cSql += "FAV_NOME = '" + PadR(EscapeSql(oFavoriteRecord:Get("nome")), 100) + "', "
+  cSql += "FAV_SQL = '" + EscapeSql(oFavoriteRecord:Get("sql")) + "', "
+  cSql += "FAV_BANCO = '" + PadR(oFavoriteRecord:Get("banco"), 20) + "', "
+  cSql += "FAV_TIPO = '" + PadR(oFavoriteRecord:Get("tipo"), 10) + "', "
+  cSql += "FAV_DESCRICAO = " + IIf(Empty(oFavoriteRecord:Get("descricao")), "NULL", "'" + PadR(EscapeSql(oFavoriteRecord:Get("descricao")), 250) + "'") + " "
+  cSql += "WHERE FAV_ID = '" + cId + "' "
+  cSql += "AND FAV_DELETED = ' '"
+  
+  If TcSqlExec(cSql) >= 0
+    TcSqlCommit()
+    lRet := .T.
+  EndIf
+  
+  Return lRet
+
+/*============================================================================*
+  Metodo: GetFavorites
+  Descricao: Lista favoritos do usuario
+  
+  Parametros:
+    cUser - Codigo do usuario
+    
+  Retorno:
+    Array - Array de objetos com os favoritos
+    
+  Estrutura dos objetos retornados:
+    - id         (Character): UUID do registro
+    - empresa    (Character): Codigo da empresa
+    - filial     (Character): Codigo da filial
+    - usuario    (Character): Codigo do usuario
+    - nome       (Character): Nome do favorito
+    - sql        (Character): Query SQL
+    - banco      (Character): Nome do banco
+    - tipo       (Character): Tipo de query
+    - descricao  (Character): Descricao
+    - data       (Date):      Data de cadastro
+    
+  Exemplos:
+    aFavorites := FavoriteService():GetFavorites(cUsername)
+ *============================================================================*/
+Method GetFavorites(cUser As Character) As Array
+  Local aFavorites As Array := {}
+  Local cTable    As Character := ""
+  Local cQuery    As Character := ""
+  Local cAlias    As Character := "FAVORITES"
+  
+  Default cUser := ""
+  
+  If Empty(cUser)
+    Return aFavorites
+  EndIf
+  
+  cTable := RetSqlName("PQFAVS")
+  
+  cQuery := "SELECT FAV_ID, FAV_EMPRESA, FAV_FILIAL, FAV_USUARIO, FAV_NOME, FAV_SQL, FAV_BANCO, FAV_TIPO, FAV_DESCRICAO, FAV_DTCAD "
+  cQuery += "FROM " + cTable + " "
+  cQuery += "WHERE FAV_USUARIO = '" + PadR(cUser, 20) + "' "
+  cQuery += "AND FAV_DELETED = ' ' "
+  cQuery += "ORDER BY FAV_DTCAD DESC"
+  
+  dbUseArea(.T., , cQuery, cAlias, .F., .F.)
+  
+  If (cAlias)->(Eof()) .And. (cAlias)->(Bof())
+    (cAlias)->(DbCloseArea())
+    Return aFavorites
+  EndIf
+  
+  (cAlias)->(DbGoTop())
+  
+  While !(cAlias)->(Eof())
+    Local oFav As Object := JsonObject():New()
+    
+    oFav:Set("id",        (cAlias)->FAV_ID)
+    oFav:Set("empresa",   (cAlias)->FAV_EMPRESA)
+    oFav:Set("filial",    (cAlias)->FAV_FILIAL)
+    oFav:Set("usuario",   AllTrim((cAlias)->FAV_USUARIO))
+    oFav:Set("nome",       (cAlias)->FAV_NOME)
+    oFav:Set("sql",        (cAlias)->FAV_SQL)
+    oFav:Set("banco",      AllTrim((cAlias)->FAV_BANCO))
+    oFav:Set("tipo",       AllTrim((cAlias)->FAV_TIPO))
+    oFav:Set("descricao",  IIf(NullVal((cAlias)->FAV_DESCRICAO), "", (cAlias)->FAV_DESCRICAO))
+    oFav:Set("data",       (cAlias)->FAV_DTCAD)
+    
+    AAdd(aFavorites, oFav)
+    
+    (cAlias)->(DbSkip())
+  EndDo
+  
+  (cAlias)->(DbCloseArea())
+  
+  Return aFavorites
+
+/*============================================================================*
+  Metodo: GetFavoriteById
+  Descricao: Busca favorito por ID
+  
+  Parametros:
+    cId - UUID do registro
+    
+  Retorno:
+    Object - Objeto com os dados do favorito ou objeto vazio se nao encontrado
+    
+  Estrutura do objeto retornado:
+    - id         (Character): UUID do registro
+    - empresa    (Character): Codigo da empresa
+    - filial     (Character): Codigo da filial
+    - usuario    (Character): Codigo do usuario
+    - nome       (Character): Nome do favorito
+    - sql        (Character): Query SQL
+    - banco      (Character): Nome do banco
+    - tipo       (Character): Tipo de query
+    - descricao  (Character): Descricao
+    - data       (Date):      Data de cadastro
+    
+  Exemplos:
+    oFav := FavoriteService():GetFavoriteById(cId)
+ *============================================================================*/
+Method GetFavoriteById(cId As Character) As Object
+  Local oRet     As Object := JsonObject():New()
+  Local cTable   As Character := ""
+  Local cQuery   As Character := ""
+  Local cAlias   As Character := "FAVBYID"
+  
+  Default cId := ""
+  
+  If Empty(cId)
+    Return oRet
+  EndIf
+  
+  cTable := RetSqlName("PQFAVS")
+  
+  cQuery := "SELECT FAV_ID, FAV_EMPRESA, FAV_FILIAL, FAV_USUARIO, FAV_NOME, FAV_SQL, FAV_BANCO, FAV_TIPO, FAV_DESCRICAO, FAV_DTCAD "
+  cQuery += "FROM " + cTable + " "
+  cQuery += "WHERE FAV_ID = '" + cId + "' "
+  cQuery += "AND FAV_DELETED = ' '"
+  
+  dbUseArea(.T., , cQuery, cAlias, .F., .F.)
+  
+  If (cAlias)->(Eof()) .And. (cAlias)->(Bof())
+    (cAlias)->(DbCloseArea())
+    Return oRet
+  EndIf
+  
+  oRet:Set("id",        (cAlias)->FAV_ID)
+  oRet:Set("empresa",   (cAlias)->FAV_EMPRESA)
+  oRet:Set("filial",    (cAlias)->FAV_FILIAL)
+  oRet:Set("usuario",   AllTrim((cAlias)->FAV_USUARIO))
+  oRet:Set("nome",       (cAlias)->FAV_NOME)
+  oRet:Set("sql",        (cAlias)->FAV_SQL)
+  oRet:Set("banco",      AllTrim((cAlias)->FAV_BANCO))
+  oRet:Set("tipo",       AllTrim((cAlias)->FAV_TIPO))
+  oRet:Set("descricao",  IIf(NullVal((cAlias)->FAV_DESCRICAO), "", (cAlias)->FAV_DESCRICAO))
+  oRet:Set("data",       (cAlias)->FAV_DTCAD)
+  
+  (cAlias)->(DbCloseArea())
+  
+  Return oRet
+
+/*============================================================================*
+  Metodo: DeleteFavorite
+  Descricao: Realiza exclusao logica de favorito
+  
+  Parametros:
+    cId - UUID do registro
+    
+  Retorno:
+    Logical - .T. se sucesso, .F. se erro
+    
+  Exemplos:
+    lOk := FavoriteService():DeleteFavorite(cId)
+ *============================================================================*/
+Method DeleteFavorite(cId As Character) As Logical
+  Local lRet     As Logical := .F.
+  Local cSql     As Character := ""
+  Local cTable   As Character := ""
+  
+  Default cId := ""
+  
+  If Empty(cId)
+    Return lRet
+  EndIf
+  
+  cTable := RetSqlName("PQFAVS")
+  
+  cSql := "UPDATE " + cTable + " SET FAV_DELETED = '*' WHERE FAV_ID = '" + cId + "'"
+  
+  If TcSqlExec(cSql) >= 0
+    TcSqlCommit()
+    lRet := .T.
+  EndIf
+  
+  Return lRet
+
+/*============================================================================*
+  Funcao: EscapeSql
+  Descricao: Escapa caracteres especiais para evitar SQL injection
+  
+  Parametros:
+    cValue - String a ser escapada
+    
+  Retorno:
+    Character - String escapada
+ *============================================================================*/
+Static Function EscapeSql(cValue As Character) As Character
+  Local cRet As Character := ""
+  
+  Default cValue := ""
+  
+  cRet := StrTran(cValue, "'", "''")
+  cRet := StrTran(cRet, CHAR(13), " ")
+  cRet := StrTran(cRet, CHAR(10), " ")
+  
+  Return cRet
+
+Class FavoriteService
+  Method InsertFavorite(oFavoriteRecord)
+  Method UpdateFavorite(cId, oFavoriteRecord)
+  Method GetFavorites(cUser)
+  Method GetFavoriteById(cId)
+  Method DeleteFavorite(cId)
+EndClass
