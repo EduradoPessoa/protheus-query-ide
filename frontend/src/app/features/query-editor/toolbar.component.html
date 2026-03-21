@@ -1,0 +1,22 @@
+<po-toolbar
+  [p-title]="title"
+  [p-actions]="toolbarActions"
+  [p-items]="toolbarItems">
+  <div class="pq-toolbar-selects">
+    <po-select
+      name="database"
+      p-label="Banco"
+      [p-options]="databaseOptions"
+      [(ngModel)]="selectedDatabase"
+      (p-change)="onDatabaseChange($event)">
+    </po-select>
+
+    <po-select
+      name="company"
+      p-label="Empresa"
+      [p-options]="companyOptions"
+      [(ngModel)]="selectedCompany"
+      (p-change)="onCompanyChange($event)">
+    </po-select>
+  </div>
+</po-toolbar>

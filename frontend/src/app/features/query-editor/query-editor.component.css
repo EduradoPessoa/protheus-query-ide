@@ -1,0 +1,14 @@
+.pq-editor-wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+po-divider {
+  margin-bottom: 8px;
+}
+
+ngx-monaco-editor {
+  flex: 1;
+  min-height: 200px;
+}

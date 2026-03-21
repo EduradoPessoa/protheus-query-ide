@@ -5,11 +5,13 @@ import { HttpClientModule, HTTP_INTERCEPTORS } from '@angular/common/http';
 
 import { PoModule } from '@po-ui/ng-components';
 import { PoTemplatesModule } from '@po-ui/ng-templates';
+import { MonacoEditorModule } from 'ngx-monaco-editor';
 
 import { AppRoutingModule } from './app-routing.module';
 import { AppComponent } from './app.component';
 import { AuthService } from './core/auth/auth.service';
 import { ProtheusAuthInterceptor } from './core/auth/protheus-auth.interceptor';
+import { SharedModule } from './shared/shared.module';
 
 @NgModule({
   declarations: [
@@ -21,7 +23,9 @@ import { ProtheusAuthInterceptor } from './core/auth/protheus-auth.interceptor';
     PoModule,
     PoTemplatesModule,
     AppRoutingModule,
-    HttpClientModule
+    HttpClientModule,
+    MonacoEditorModule.forRoot(),
+    SharedModule
   ],
   providers: [
     AuthService,
